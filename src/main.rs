@@ -1,7 +1,105 @@
 use std::fs::File;
 use std::io::{self, prelude::*, BufReader};
 
+mod lexer {
+    #[derive(Debug, PartialEq)]
+    pub enum Token {
+        Number(i32),
+        Var(String),
+        Add,
+        Sub,
+        Mul,
+        Div,
+        Mod,
+        LParen,
+        RParen,
+        Let,
+        Print,
+        Equal,
+    }
+
+    pub fn tokenize(input: &str) -> Vec<Token> {
+        let mut tokens = Vec::new();
+        let mut chars = input.chars().peekable();
+
+        while let Some(&ch) = chars.peek() {
+            match ch {
+                '0'..='9' => {
+                    let mut number = String::new();
+                    while let Some(&ch) = chars.peek() {
+                        if ch.is_numeric() {
+                            number.push(ch);
+                            chars.next();
+                        } else {
+                            break;
+                        }
+                    }
+                    tokens.push(Token::Number(number.parse().unwrap()));
+                }
+                'a'..='z' | 'A'..='Z' => {
+                    let mut ident = String::new();
+                    while let Some(&ch) = chars.peek() {
+                        if ch.is_alphanumeric() {
+                            ident.push(ch);
+                            chars.next();
+                        } else {
+                            break;
+                        }
+                    }
+                    tokens.push(match ident.as_str() {
+                        "let" => Token::Let,
+                        "print" => Token::Print,
+                        _ => Token::Var(ident),
+                    });
+                }
+                '+' => {
+                    chars.next();
+                    tokens.push(Token::Add);
+                }
+                '-' => {
+                    chars.next();
+                    tokens.push(Token::Sub);
+                }
+                '*' => {
+                    chars.next();
+                    tokens.push(Token::Mul);
+                }
+                '/' => {
+                    chars.next();
+                    tokens.push(Token::Div);
+                }
+                '%' => {
+                    chars.next();
+                    tokens.push(Token::Mod);
+                }
+                '(' => {
+                    chars.next();
+                    tokens.push(Token::LParen);
+                }
+                ')' => {
+                    chars.next();
+                    tokens.push(Token::RParen);
+                }
+                '=' => {
+                    chars.next();
+                    tokens.push(Token::Equal);
+                }
+                ' ' | '\t' | '\n' | '\r' => {
+                    chars.next();
+                }
+                _ => {
+                    panic!("Unexpected character: {}", ch);
+                }
+            }
+        }
+
+        tokens
+    }
+}
+
 mod ast {
+    use crate::lexer::Token;
+
     #[derive(Debug)]
     pub enum Expr {
         Number(i32),
@@ -20,34 +118,35 @@ mod ast {
     }
 
     impl Expr {
-        pub fn parse_expr(tokens: &[&str]) -> Expr {
+        pub fn parse_expr(tokens: &[Token]) -> Expr {
             let mut pos = 0;
             Self::parse_expr_bp(tokens, &mut pos, 0)
         }
 
-        fn parse_expr_bp(tokens: &[&str], pos: &mut usize, min_bp: u8) -> Expr {
+        fn parse_expr_bp(tokens: &[Token], pos: &mut usize, min_bp: u8) -> Expr {
             if *pos >= tokens.len() {
                 panic!("Unexpected end of tokens");
             }
 
-            let mut lhs = match tokens[*pos] {
-                "(" => {
+            let mut lhs = match &tokens[*pos] {
+                Token::LParen => {
                     *pos += 1;
                     let expr = Self::parse_expr_bp(tokens, pos, 0);
-                    if *pos >= tokens.len() || tokens[*pos] != ")" {
+                    if *pos >= tokens.len() || tokens[*pos] != Token::RParen {
                         panic!("Expected closing parenthesis");
                     }
                     *pos += 1; // Skip ')'
                     expr
                 }
-                token => {
+                Token::Number(n) => {
                     *pos += 1;
-                    if let Ok(n) = token.parse::<i32>() {
-                        Expr::Number(n)
-                    } else {
-                        Expr::Var(token.to_string())
-                    }
+                    Expr::Number(*n)
                 }
+                Token::Var(name) => {
+                    *pos += 1;
+                    Expr::Var(name.clone())
+                }
+                _ => panic!("Unexpected token: {:?}", tokens[*pos]),
             };
 
             loop {
@@ -55,9 +154,13 @@ mod ast {
                     break;
                 }
 
-                let op = match tokens.get(*pos) {
-                    Some(&op) => op,
-                    None => break,
+                let op = match &tokens[*pos] {
+                    Token::Add => "+",
+                    Token::Sub => "-",
+                    Token::Mul => "*",
+                    Token::Div => "/",
+                    Token::Mod => "%",
+                    _ => break,
                 };
 
                 let (l_bp, r_bp) = match op {
@@ -90,26 +193,35 @@ mod ast {
             lhs
         }
 
-        pub fn parse_line(line: &str) -> Stmt {
-            let tokens: Vec<&str> = line.split_whitespace().collect();
+        pub fn parse_line(tokens: &[Token]) -> Stmt {
             if tokens.is_empty() {
                 panic!("Empty line");
             }
+
             match tokens[0] {
-                "let" => {
+                Token::Let => {
                     if tokens.len() < 4 {
                         panic!("Invalid let statement");
                     }
-                    let var_name = tokens[1].to_string();
-                    let expr = Self::parse_expr(&tokens[3..]);
-                    Stmt::Let(var_name, expr)
+                    if let Token::Var(ref var_name) = tokens[1] {
+                        if tokens[2] != Token::Equal {
+                            panic!("Expected '=' in let statement");
+                        }
+                        let expr = Self::parse_expr(&tokens[3..]);
+                        Stmt::Let(var_name.clone(), expr)
+                    } else {
+                        panic!("Expected variable name in let statement");
+                    }
                 }
-                "print" => {
+                Token::Print => {
                     if tokens.len() != 2 {
                         panic!("Invalid print statement");
                     }
-                    let var_name = tokens[1].to_string();
-                    Stmt::Print(var_name)
+                    if let Token::Var(ref var_name) = tokens[1] {
+                        Stmt::Print(var_name.clone())
+                    } else {
+                        panic!("Expected variable name in print statement");
+                    }
                 }
                 _ => panic!("Invalid statement"),
             }
@@ -262,6 +374,7 @@ mod vm {
 }
 
 use crate::ast::Expr;
+use crate::lexer::tokenize;
 use crate::vm::Vm;
 
 fn main() -> io::Result<()> {
@@ -273,7 +386,8 @@ fn main() -> io::Result<()> {
 
     for line in reader.lines() {
         let line = line?;
-        let stmt = Expr::parse_line(&line);
+        let tokens = tokenize(&line);
+        let stmt = Expr::parse_line(&tokens);
         vm.compile(&stmt);
     }
 
@@ -281,3 +395,4 @@ fn main() -> io::Result<()> {
 
     Ok(())
 }
+

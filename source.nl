@@ -8,3 +8,5 @@ let e = a + ( b + a ) * a
 print e
 let f = ( a + ( b + a ) ) * a
 print f
+let g = (a+(b+a))*a
+print g
