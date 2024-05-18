@@ -10,3 +10,10 @@ let f = ( a + ( b + a ) ) * a
 print f
 let g = (a+(b+a))*a
 print g
+if a > b {
+    print "a great than b"
+} else if a == b {
+    print "a equals to b"
+} else {
+    print "a less than b"
+}

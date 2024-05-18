@@ -231,9 +231,12 @@ mod ast {
 
 mod vm {
     use crate::ast::{Expr, Stmt};
+    use crate::lexer::tokenize;
     use std::collections::HashMap;
-    use std::io::{self, Error};
+    use std::fs::File;
     use std::str::FromStr;
+    use std::io::{self, Error, prelude::*, BufReader};
+
 
     pub struct Vm {
         instructions: Vec<Instruction>,
@@ -246,6 +249,19 @@ mod vm {
                 instructions: Vec::new(),
                 context: HashMap::new(),
             }
+        }
+
+        pub fn parse_file(&mut self, filename: &str) -> Result<(), Error> {
+            let file = File::open(filename)?;
+            let reader = BufReader::new(file);
+
+            for line in reader.lines() {
+                let line = line?;
+                let tokens = tokenize(&line);
+                let stmt = Expr::parse_line(&tokens);
+                self.compile(&stmt);
+            }
+            Ok(())
         }
 
         pub fn compile(&mut self, stmt: &Stmt) {
@@ -373,24 +389,13 @@ mod vm {
     }
 }
 
-use crate::ast::Expr;
-use crate::lexer::tokenize;
 use crate::vm::Vm;
 
 fn main() -> io::Result<()> {
     let path = "source.nl";
-    let file = File::open(path)?;
-    let reader = BufReader::new(file);
 
     let mut vm = Vm::new();
-
-    for line in reader.lines() {
-        let line = line?;
-        let tokens = tokenize(&line);
-        let stmt = Expr::parse_line(&tokens);
-        vm.compile(&stmt);
-    }
-
+    vm.parse_file(&path)?;
     vm.execute();
 
     Ok(())
