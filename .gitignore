@@ -1,3 +1,4 @@
 /target
 Cargo.lock
 *.txt
+src/main.ai.rs
