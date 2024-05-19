@@ -1,7 +1,7 @@
 use std::io;
 
 mod lexer {
-    #[derive(Debug, PartialEq)]
+    #[derive(Debug, PartialEq, Clone)]
     pub enum Token {
         Number(i32),
         Var(String),
@@ -12,9 +12,20 @@ mod lexer {
         Mod,
         LParen,
         RParen,
+        LBrace,
+        RBrace,
         Let,
         Print,
-        Equal,
+        Assign,
+        If,
+        Else,
+        EndIf,
+        Eq,  // ==
+        Neq, // !=
+        Lt,  // <
+        Gt,  // >
+        Le,  // <=
+        Ge,  // >=
     }
 
     pub fn tokenize(input: &str) -> Vec<Token> {
@@ -48,6 +59,8 @@ mod lexer {
                     tokens.push(match ident.as_str() {
                         "let" => Token::Let,
                         "print" => Token::Print,
+                        "if" => Token::If,
+                        "else" => Token::Else,
                         _ => Token::Var(ident),
                     });
                 }
@@ -79,12 +92,52 @@ mod lexer {
                     chars.next();
                     tokens.push(Token::RParen);
                 }
+                '{' => {
+                    chars.next();
+                    tokens.push(Token::LBrace);
+                }
+                '}' => {
+                    chars.next();
+                    tokens.push(Token::RBrace);
+                }
                 '=' => {
                     chars.next();
-                    tokens.push(Token::Equal);
+                    if let Some(&'=') = chars.peek() {
+                        chars.next();
+                        tokens.push(Token::Eq);
+                    } else {
+                        tokens.push(Token::Assign);
+                    }
                 }
                 ' ' | '\t' | '\n' | '\r' => {
                     chars.next();
+                }
+                '!' => {
+                    chars.next();
+                    if let Some(&'=') = chars.peek() {
+                        chars.next();
+                        tokens.push(Token::Neq);
+                    } else {
+                        panic!("Unexpected character after '!': expected '='");
+                    }
+                }
+                '<' => {
+                    chars.next();
+                    if let Some(&'=') = chars.peek() {
+                        chars.next();
+                        tokens.push(Token::Le);
+                    } else {
+                        tokens.push(Token::Lt);
+                    }
+                }
+                '>' => {
+                    chars.next();
+                    if let Some(&'=') = chars.peek() {
+                        chars.next();
+                        tokens.push(Token::Ge);
+                    } else {
+                        tokens.push(Token::Gt);
+                    }
                 }
                 _ => {
                     panic!("Unexpected character: {}", ch);
@@ -100,6 +153,94 @@ mod ast {
     use crate::lexer::Token;
 
     #[derive(Debug)]
+    pub enum Stmt {
+        Let(String, Expr),
+        Print(String),
+        If(Expr, Vec<Stmt>, Option<Vec<Stmt>>), // 条件，真分支，假分支(可选)
+    }
+
+    impl Stmt {
+        pub fn parse_line(tokens: &[Token]) -> Stmt {
+            if tokens.is_empty() {
+                panic!("Empty line");
+            }
+
+            match tokens[0] {
+                Token::Let => {
+                    if tokens.len() < 4 {
+                        panic!("Invalid let statement");
+                    }
+                    if let Token::Var(ref var_name) = tokens[1] {
+                        if tokens[2] != Token::Assign {
+                            panic!("Expected '=' in let statement");
+                        }
+                        let expr = Expr::parse_expr(&tokens[3..]);
+                        Stmt::Let(var_name.clone(), expr)
+                    } else {
+                        panic!("Expected variable name in let statement");
+                    }
+                }
+                Token::Print => {
+                    if tokens.len() != 2 {
+                        panic!("Invalid print statement");
+                    }
+                    if let Token::Var(ref var_name) = tokens[1] {
+                        Stmt::Print(var_name.clone())
+                    } else {
+                        panic!("Expected variable name in print statement");
+                    }
+                }
+                Token::If => {
+                    let mut pos = 1;
+                    let expr = Expr::parse_comparison_op(tokens, &mut pos);
+                    let (true_branch, false_branch) = Self::parse_if_branches(tokens, &mut pos);
+                    Stmt::If(expr, true_branch, false_branch)
+                }
+                _ => panic!("Invalid statement"),
+            }
+        }
+
+        fn parse_if_branches(tokens: &[Token], pos: &mut usize) -> (Vec<Stmt>, Option<Vec<Stmt>>) {
+            let true_branch = Self::parse_block(tokens, pos);
+            let false_branch = if *pos < tokens.len() && tokens[*pos] == Token::Else {
+                *pos += 1; // skip 'else'
+                Some(Self::parse_block(tokens, pos))
+            } else {
+                None
+            };
+            (true_branch, false_branch)
+        }
+
+        fn parse_block(tokens: &[Token], pos: &mut usize) -> Vec<Stmt> {
+            if *pos >= tokens.len() || tokens[*pos] != Token::LBrace {
+                panic!("Expected opening brace at the start of a block");
+            }
+            *pos += 1; // skip '{'
+            let mut stmts = Vec::new();
+            while *pos < tokens.len() && tokens[*pos] != Token::RBrace {
+                let stmt = Self::parse_line(&tokens[*pos..]);
+                stmts.push(stmt);
+                *pos += 1; // move to next statement
+            }
+            if *pos >= tokens.len() || tokens[*pos] != Token::RBrace {
+                panic!("Expected closing brace at the end of a block");
+            }
+            *pos += 1; // skip '}'
+            stmts
+        }
+    }
+
+    #[derive(Debug)]
+    pub enum CompareOp {
+        Eq,
+        Neq,
+        Lt,
+        Gt,
+        Le,
+        Ge,
+    }
+
+    #[derive(Debug)]
     pub enum Expr {
         Number(i32),
         Var(String),
@@ -108,12 +249,7 @@ mod ast {
         Mul(Box<Expr>, Box<Expr>),
         Div(Box<Expr>, Box<Expr>),
         Mod(Box<Expr>, Box<Expr>),
-    }
-
-    #[derive(Debug)]
-    pub enum Stmt {
-        Let(String, Expr),
-        Print(String),
+        Compare(Box<Expr>, CompareOp, Box<Expr>),
     }
 
     impl Expr {
@@ -192,50 +328,35 @@ mod ast {
             lhs
         }
 
-        pub fn parse_line(tokens: &[Token]) -> Stmt {
-            if tokens.is_empty() {
-                panic!("Empty line");
-            }
+        pub fn parse_comparison_op(tokens: &[Token], pos: &mut usize) -> Expr {
+            let lhs = Self::parse_expr_bp(tokens, pos, 0);
 
-            match tokens[0] {
-                Token::Let => {
-                    if tokens.len() < 4 {
-                        panic!("Invalid let statement");
-                    }
-                    if let Token::Var(ref var_name) = tokens[1] {
-                        if tokens[2] != Token::Equal {
-                            panic!("Expected '=' in let statement");
-                        }
-                        let expr = Self::parse_expr(&tokens[3..]);
-                        Stmt::Let(var_name.clone(), expr)
-                    } else {
-                        panic!("Expected variable name in let statement");
-                    }
-                }
-                Token::Print => {
-                    if tokens.len() != 2 {
-                        panic!("Invalid print statement");
-                    }
-                    if let Token::Var(ref var_name) = tokens[1] {
-                        Stmt::Print(var_name.clone())
-                    } else {
-                        panic!("Expected variable name in print statement");
-                    }
-                }
-                _ => panic!("Invalid statement"),
-            }
+            let op = match &tokens[*pos] {
+                Token::Eq => CompareOp::Eq,
+                Token::Neq => CompareOp::Neq,
+                Token::Lt => CompareOp::Lt,
+                Token::Le => CompareOp::Le,
+                Token::Gt => CompareOp::Gt,
+                Token::Ge => CompareOp::Ge,
+                _ => panic!("Unexpected token: {:?}", tokens[*pos]),
+            };
+            *pos += 1;
+
+            let rhs = Self::parse_expr_bp(tokens, pos, 0);
+
+            Expr::Compare(Box::new(lhs), op, Box::new(rhs))
         }
     }
 }
 
 mod vm {
-    use crate::ast::{Expr, Stmt};
+    use crate::ast::{Expr, Stmt, CompareOp};
     use crate::lexer::tokenize;
+    use crate::lexer::Token;
     use std::collections::HashMap;
     use std::fs::File;
+    use std::io::{self, prelude::*, BufReader, Error};
     use std::str::FromStr;
-    use std::io::{self, Error, prelude::*, BufReader};
-
 
     pub struct Vm {
         instructions: Vec<Instruction>,
@@ -253,12 +374,67 @@ mod vm {
         pub fn parse_file(&mut self, filename: &str) -> Result<(), Error> {
             let file = File::open(filename)?;
             let reader = BufReader::new(file);
+            let mut lines = reader.lines().peekable();
 
-            for line in reader.lines() {
+            while let Some(line) = lines.next() {
                 let line = line?;
                 let tokens = tokenize(&line);
-                let stmt = Expr::parse_line(&tokens);
-                self.compile(&stmt);
+
+                if tokens.is_empty() {
+                    continue;
+                }
+
+                if let Token::If = tokens[0] {
+                    let mut if_tokens = tokens.clone();
+                    let mut true_branch = Vec::new();
+                    let mut false_branch = Vec::new();
+                    let mut current_branch = &mut true_branch;
+                    let mut else_found = false;
+
+                    while let Some(next_line) = lines.peek() {
+                        let next_line = next_line.as_ref().unwrap();
+                        if next_line.trim().is_empty() {
+                            lines.next();
+                            continue;
+                        }
+
+                        let next_tokens = tokenize(&next_line);
+
+                        if next_tokens.is_empty() {
+                            lines.next();
+                            continue;
+                        }
+
+                        match next_tokens[0] {
+                            Token::Else => {
+                                if else_found {
+                                    panic!("Multiple else statements in if block");
+                                }
+                                else_found = true;
+                                current_branch = &mut false_branch;
+                                lines.next();
+                            }
+                            Token::EndIf => {
+                                lines.next();
+                                break;
+                            }
+                            _ => {
+                                current_branch.push(Stmt::parse_line(&next_tokens));
+                                lines.next();
+                            }
+                        }
+                    }
+
+                    let if_stmt = Stmt::If(
+                        Expr::parse_comparison_op(&if_tokens, &mut 1),
+                        true_branch,
+                        if false_branch.is_empty() { None } else { Some(false_branch) },
+                    );
+                    self.compile(&if_stmt);
+                } else {
+                    let stmt = Stmt::parse_line(&tokens);
+                    self.compile(&stmt);
+                }
             }
             Ok(())
         }
@@ -273,6 +449,34 @@ mod vm {
                     self.instructions.push(Instruction::Load(var_name.clone()));
                     self.instructions.push(Instruction::Print);
                 }
+                Stmt::If(cond, true_branch, false_branch) => {
+                    self.compile_expr(cond);
+                    let jmp_if_false_index = self.instructions.len();
+                    self.instructions.push(Instruction::JmpIfFalse(0)); // placeholder
+
+                    for stmt in true_branch {
+                        self.compile(stmt);
+                    }
+
+                    if let Some(false_branch) = false_branch {
+                        let jmp_index = self.instructions.len();
+                        self.instructions.push(Instruction::Jmp(0)); // placeholder
+
+                        let false_branch_index = self.instructions.len();
+                        self.instructions[jmp_if_false_index] = Instruction::JmpIfFalse(false_branch_index);
+
+                        for stmt in false_branch {
+                            self.compile(stmt);
+                        }
+
+                        let end_index = self.instructions.len();
+                        self.instructions[jmp_index] = Instruction::Jmp(end_index);
+                    } else {
+                        let end_index = self.instructions.len();
+                        self.instructions[jmp_if_false_index] = Instruction::JmpIfFalse(end_index);
+                    }
+                }
+                _ => panic!("Invalid statement"),
             }
         }
 
@@ -305,13 +509,27 @@ mod vm {
                     self.compile_expr(right);
                     self.instructions.push(Instruction::Mod);
                 }
+                Expr::Compare(left, op, right) => {
+                    self.compile_expr(left);
+                    self.compile_expr(right);
+                    match op {
+                        CompareOp::Eq => self.instructions.push(Instruction::Eq),
+                        CompareOp::Neq => self.instructions.push(Instruction::Neq),
+                        CompareOp::Lt => self.instructions.push(Instruction::Lt),
+                        CompareOp::Le => self.instructions.push(Instruction::Le),
+                        CompareOp::Gt => self.instructions.push(Instruction::Gt),
+                        CompareOp::Ge => self.instructions.push(Instruction::Ge),
+                    }
+                }
             }
         }
 
         pub fn execute(&mut self) -> i32 {
             let mut stack = Vec::new();
-            for instruction in &self.instructions {
-                match instruction {
+            let mut ip = 0; // instruction pointer
+
+            while ip < self.instructions.len() {
+                match &self.instructions[ip] {
                     Instruction::Push(n) => stack.push(*n),
                     Instruction::Load(var_name) => {
                         if let Some(value) = self.context.get(var_name) {
@@ -349,11 +567,53 @@ mod vm {
                         let left = stack.pop().expect("no left operand");
                         stack.push(left % right);
                     }
+                    Instruction::Eq => {
+                        let right = stack.pop().expect("no right operand");
+                        let left = stack.pop().expect("no left operand");
+                        stack.push((left == right) as i32);
+                    }
+                    Instruction::Neq => {
+                        let right = stack.pop().expect("no right operand");
+                        let left = stack.pop().expect("no left operand");
+                        stack.push((left != right) as i32);
+                    }
+                    Instruction::Lt => {
+                        let right = stack.pop().expect("no right operand");
+                        let left = stack.pop().expect("no left operand");
+                        stack.push((left < right) as i32);
+                    }
+                    Instruction::Le => {
+                        let right = stack.pop().expect("no right operand");
+                        let left = stack.pop().expect("no left operand");
+                        stack.push((left <= right) as i32);
+                    }
+                    Instruction::Gt => {
+                        let right = stack.pop().expect("no right operand");
+                        let left = stack.pop().expect("no left operand");
+                        stack.push((left > right) as i32);
+                    }
+                    Instruction::Ge => {
+                        let right = stack.pop().expect("no right operand");
+                        let left = stack.pop().expect("no left operand");
+                        stack.push((left >= right) as i32);
+                    }
+                    Instruction::JmpIfFalse(target) => {
+                        let value = stack.pop().expect("no value to test");
+                        if value == 0 {
+                            ip = *target;
+                            continue;
+                        }
+                    }
+                    Instruction::Jmp(target) => {
+                        ip = *target;
+                        continue;
+                    }
                     Instruction::Print => {
                         let value = stack.pop().expect("no value to print");
                         println!("{}", value);
                     }
                 }
+                ip += 1;
             }
             stack.pop().unwrap_or(0)
         }
@@ -368,6 +628,14 @@ mod vm {
         Mul,           // 乘
         Div,           // 除
         Mod,           // 取模
+        Eq,            // 等于
+        Neq,           // 不等于
+        Lt,            // 小于
+        Le,            // 小于等于
+        Gt,            // 大于
+        Ge,            // 大于等于
+        JmpIfFalse(usize), // 条件跳转
+        Jmp(usize),        // 无条件跳转
         Print,         // 打印
     }
 
@@ -397,6 +665,10 @@ fn main() -> io::Result<()> {
     vm.parse_file(&path)?;
     vm.execute();
 
+    let fi_filepath = "source_if.nl";
+    vm = Vm::new();
+    vm.parse_file(&fi_filepath)?;
+    vm.execute();
+
     Ok(())
 }
-
