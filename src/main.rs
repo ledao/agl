@@ -26,6 +26,7 @@ mod lexer {
         Gt,  // >
         Le,  // <=
         Ge,  // >=
+        NewLine, // 表示换行符
     }
 
     pub fn tokenize(input: &str) -> Vec<Token> {
@@ -109,8 +110,19 @@ mod lexer {
                         tokens.push(Token::Assign);
                     }
                 }
-                ' ' | '\t' | '\n' | '\r' => {
+                ' ' | '\t' => {
                     chars.next();
+                }
+                '\n' => {
+                    chars.next();
+                    tokens.push(Token::NewLine);
+                }
+                '\r' => {
+                    chars.next();
+                    if let Some(&'\n') = chars.peek() {
+                        chars.next();
+                    }
+                    tokens.push(Token::NewLine);
                 }
                 '!' => {
                     chars.next();
@@ -160,43 +172,60 @@ mod ast {
     }
 
     impl Stmt {
-        pub fn parse_line(tokens: &[Token]) -> Stmt {
-            if tokens.is_empty() {
-                panic!("Empty line");
+        pub fn parse_file(tokens: &[Token]) -> Vec<Stmt> {
+            let mut pos = 0;
+            let mut stmts = Vec::new();
+            
+            while pos < tokens.len() {
+                if tokens[pos] == Token::NewLine {
+                    pos += 1;
+                    continue;
+                }
+                let stmt = Self::parse_stmt(tokens, &mut pos);
+                stmts.push(stmt);
             }
 
-            match tokens[0] {
+            stmts
+        }
+
+        fn parse_stmt(tokens: &[Token], pos: &mut usize) -> Stmt {
+            match tokens[*pos] {
                 Token::Let => {
-                    if tokens.len() < 4 {
-                        panic!("Invalid let statement");
+                    *pos += 1;
+                    if *pos >= tokens.len() {
+                        panic!("Unexpected end of tokens in let statement");
                     }
-                    if let Token::Var(ref var_name) = tokens[1] {
-                        if tokens[2] != Token::Assign {
+                    if let Token::Var(ref var_name) = tokens[*pos] {
+                        *pos += 1;
+                        if *pos >= tokens.len() || tokens[*pos] != Token::Assign {
                             panic!("Expected '=' in let statement");
                         }
-                        let expr = Expr::parse_expr(&tokens[3..]);
+                        *pos += 1;
+                        let expr = Expr::parse_expr(tokens, pos);
                         Stmt::Let(var_name.clone(), expr)
                     } else {
                         panic!("Expected variable name in let statement");
                     }
                 }
                 Token::Print => {
-                    if tokens.len() != 2 {
-                        panic!("Invalid print statement");
+                    *pos += 1;
+                    if *pos >= tokens.len() {
+                        panic!("Unexpected end of tokens in print statement");
                     }
-                    if let Token::Var(ref var_name) = tokens[1] {
+                    if let Token::Var(ref var_name) = tokens[*pos] {
+                        *pos += 1;
                         Stmt::Print(var_name.clone())
                     } else {
                         panic!("Expected variable name in print statement");
                     }
                 }
                 Token::If => {
-                    let mut pos = 1;
-                    let expr = Expr::parse_comparison_op(tokens, &mut pos);
-                    let (true_branch, false_branch) = Self::parse_if_branches(tokens, &mut pos);
+                    *pos += 1;
+                    let expr = Expr::parse_comparison_op(tokens, pos);
+                    let (true_branch, false_branch) = Self::parse_if_branches(tokens, pos);
                     Stmt::If(expr, true_branch, false_branch)
                 }
-                _ => panic!("Invalid statement"),
+                _ => panic!("Invalid statement at token: {:?}", tokens[*pos]),
             }
         }
 
@@ -218,9 +247,12 @@ mod ast {
             *pos += 1; // skip '{'
             let mut stmts = Vec::new();
             while *pos < tokens.len() && tokens[*pos] != Token::RBrace {
-                let stmt = Self::parse_line(&tokens[*pos..]);
+                if tokens[*pos] == Token::NewLine {
+                    *pos += 1;
+                    continue;
+                }
+                let stmt = Self::parse_stmt(tokens, pos);
                 stmts.push(stmt);
-                *pos += 1; // move to next statement
             }
             if *pos >= tokens.len() || tokens[*pos] != Token::RBrace {
                 panic!("Expected closing brace at the end of a block");
@@ -253,9 +285,8 @@ mod ast {
     }
 
     impl Expr {
-        pub fn parse_expr(tokens: &[Token]) -> Expr {
-            let mut pos = 0;
-            Self::parse_expr_bp(tokens, &mut pos, 0)
+        pub fn parse_expr(tokens: &[Token], pos: &mut usize) -> Expr {
+            Self::parse_expr_bp(tokens, pos, 0)
         }
 
         fn parse_expr_bp(tokens: &[Token], pos: &mut usize, min_bp: u8) -> Expr {
@@ -373,68 +404,14 @@ mod vm {
 
         pub fn parse_file(&mut self, filename: &str) -> Result<(), Error> {
             let file = File::open(filename)?;
-            let reader = BufReader::new(file);
-            let mut lines = reader.lines().peekable();
+            let mut reader = BufReader::new(file);
+            let mut file_content = String::new();
+            reader.read_to_string(&mut file_content)?;
 
-            while let Some(line) = lines.next() {
-                let line = line?;
-                let tokens = tokenize(&line);
-
-                if tokens.is_empty() {
-                    continue;
-                }
-
-                if let Token::If = tokens[0] {
-                    let mut if_tokens = tokens.clone();
-                    let mut true_branch = Vec::new();
-                    let mut false_branch = Vec::new();
-                    let mut current_branch = &mut true_branch;
-                    let mut else_found = false;
-
-                    while let Some(next_line) = lines.peek() {
-                        let next_line = next_line.as_ref().unwrap();
-                        if next_line.trim().is_empty() {
-                            lines.next();
-                            continue;
-                        }
-
-                        let next_tokens = tokenize(&next_line);
-
-                        if next_tokens.is_empty() {
-                            lines.next();
-                            continue;
-                        }
-
-                        match next_tokens[0] {
-                            Token::Else => {
-                                if else_found {
-                                    panic!("Multiple else statements in if block");
-                                }
-                                else_found = true;
-                                current_branch = &mut false_branch;
-                                lines.next();
-                            }
-                            Token::EndIf => {
-                                lines.next();
-                                break;
-                            }
-                            _ => {
-                                current_branch.push(Stmt::parse_line(&next_tokens));
-                                lines.next();
-                            }
-                        }
-                    }
-
-                    let if_stmt = Stmt::If(
-                        Expr::parse_comparison_op(&if_tokens, &mut 1),
-                        true_branch,
-                        if false_branch.is_empty() { None } else { Some(false_branch) },
-                    );
-                    self.compile(&if_stmt);
-                } else {
-                    let stmt = Stmt::parse_line(&tokens);
-                    self.compile(&stmt);
-                }
+            let tokens = tokenize(&file_content);
+            let stmts = Stmt::parse_file(&tokens);
+            for stmt in stmts {
+                self.compile(&stmt);
             }
             Ok(())
         }
@@ -620,23 +597,23 @@ mod vm {
     }
 
     pub enum Instruction {
-        Push(i32),     // 压栈
-        Load(String),  // 加载变量
-        Store(String), // 存储变量
-        Add,           // 加
-        Sub,           // 减
-        Mul,           // 乘
-        Div,           // 除
-        Mod,           // 取模
-        Eq,            // 等于
-        Neq,           // 不等于
-        Lt,            // 小于
-        Le,            // 小于等于
-        Gt,            // 大于
-        Ge,            // 大于等于
+        Push(i32),         // 压栈
+        Load(String),      // 加载变量
+        Store(String),     // 存储变量
+        Add,               // 加
+        Sub,               // 减
+        Mul,               // 乘
+        Div,               // 除
+        Mod,               // 取模
+        Eq,                // 等于
+        Neq,               // 不等于
+        Lt,                // 小于
+        Le,                // 小于等于
+        Gt,                // 大于
+        Ge,                // 大于等于
         JmpIfFalse(usize), // 条件跳转
         Jmp(usize),        // 无条件跳转
-        Print,         // 打印
+        Print,             // 打印
     }
 
     impl FromStr for Instruction {
