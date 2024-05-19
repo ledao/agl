@@ -232,7 +232,15 @@ mod ast {
             let true_branch = Self::parse_block(tokens, pos);
             let false_branch = if *pos < tokens.len() && tokens[*pos] == Token::Else {
                 *pos += 1; // skip 'else'
-                Some(Self::parse_block(tokens, pos))
+                if *pos < tokens.len() && tokens[*pos] == Token::If {
+                    *pos += 1; // skip 'if'
+                    let expr = Expr::parse_comparison_op(tokens, pos);
+                    let (elif_true_branch, elif_false_branch) = Self::parse_if_branches(tokens, pos);
+                    let elif_stmt = Stmt::If(expr, elif_true_branch, elif_false_branch);
+                    Some(vec![elif_stmt])
+                } else {
+                    Some(Self::parse_block(tokens, pos))
+                }
             } else {
                 None
             };
