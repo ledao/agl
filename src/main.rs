@@ -19,13 +19,12 @@ mod lexer {
         Assign,
         If,
         Else,
-        EndIf,
-        Eq,  // ==
-        Neq, // !=
-        Lt,  // <
-        Gt,  // >
-        Le,  // <=
-        Ge,  // >=
+        Eq,      // ==
+        Neq,     // !=
+        Lt,      // <
+        Gt,      // >
+        Le,      // <=
+        Ge,      // >=
         NewLine, // 表示换行符
     }
 
@@ -175,7 +174,7 @@ mod ast {
         pub fn parse_file(tokens: &[Token]) -> Vec<Stmt> {
             let mut pos = 0;
             let mut stmts = Vec::new();
-            
+
             while pos < tokens.len() {
                 if tokens[pos] == Token::NewLine {
                     pos += 1;
@@ -381,9 +380,8 @@ mod ast {
 }
 
 mod vm {
-    use crate::ast::{Expr, Stmt, CompareOp};
+    use crate::ast::{CompareOp, Expr, Stmt};
     use crate::lexer::tokenize;
-    use crate::lexer::Token;
     use std::collections::HashMap;
     use std::fs::File;
     use std::io::{self, prelude::*, BufReader, Error};
@@ -440,7 +438,8 @@ mod vm {
                         self.instructions.push(Instruction::Jmp(0)); // placeholder
 
                         let false_branch_index = self.instructions.len();
-                        self.instructions[jmp_if_false_index] = Instruction::JmpIfFalse(false_branch_index);
+                        self.instructions[jmp_if_false_index] =
+                            Instruction::JmpIfFalse(false_branch_index);
 
                         for stmt in false_branch {
                             self.compile(stmt);
@@ -453,7 +452,6 @@ mod vm {
                         self.instructions[jmp_if_false_index] = Instruction::JmpIfFalse(end_index);
                     }
                 }
-                _ => panic!("Invalid statement"),
             }
         }
 
