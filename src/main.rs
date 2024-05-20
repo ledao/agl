@@ -258,6 +258,10 @@ mod ast {
                         *pos += 1;
                         let mut fields = Vec::new();
                         while *pos < tokens.len() && tokens[*pos] != Token::RBrace {
+                            if Token::NewLine == tokens[*pos] {
+                                *pos += 1;
+                                continue;
+                            }
                             if let Token::Var(ref field_name) = tokens[*pos] {
                                 *pos += 1;
                                 if *pos >= tokens.len() || tokens[*pos] != Token::Colon {
@@ -274,7 +278,7 @@ mod ast {
                                     *pos += 1;
                                 }
                             } else {
-                                panic!("Expected field name in struct definition");
+                                panic!("Expected field name in struct definition, {:?}", tokens[*pos]);
                             }
                         }
                         if *pos >= tokens.len() || tokens[*pos] != Token::RBrace {
@@ -289,7 +293,7 @@ mod ast {
                 _ => panic!(
                     "Invalid statement at token: {:?} {:?}",
                     tokens[*pos],
-                    tokens[*pos + 4]
+                    tokens[*pos-1]
                 ),
             }
         }

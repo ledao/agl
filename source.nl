@@ -29,3 +29,12 @@ if 4 > 5 {
 } else {
     print "else"
 }
+
+struct Point {
+    x: i32,
+    y: i32
+}
+
+let p = Point { x: 10, y: 20 }
+print(p.x)
+print(p.y)
