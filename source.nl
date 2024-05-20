@@ -10,3 +10,22 @@ let f = ( a + ( b + a ) ) * a
 print f
 let g = (a+(b+a))*a
 print g
+
+if a > b {
+    let c = 10
+    print c
+    print a
+} else {
+    print b
+}
+if 5 > 4 {
+    print "5 > 4"
+}
+
+if 4 > 5 {
+    print "4 > 5"
+} else if 3 < 4 {
+    print "3 < 4"
+} else {
+    print "else"
+}

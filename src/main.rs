@@ -1,10 +1,11 @@
-use std::io;
+use std::{fs::File, io::Read};
 
 mod lexer {
     #[derive(Debug, PartialEq, Clone)]
     pub enum Token {
         Number(i32),
         Var(String),
+        Str(String), // 新增字符串Token
         Add,
         Sub,
         Mul,
@@ -63,6 +64,21 @@ mod lexer {
                         "else" => Token::Else,
                         _ => Token::Var(ident),
                     });
+                }
+                '"' => {
+                    // 处理字符串字面量
+                    chars.next(); // skip the opening quote
+                    let mut string_lit = String::new();
+                    while let Some(&ch) = chars.peek() {
+                        if ch != '"' {
+                            string_lit.push(ch);
+                            chars.next();
+                        } else {
+                            break;
+                        }
+                    }
+                    chars.next(); // skip the closing quote
+                    tokens.push(Token::Str(string_lit));
                 }
                 '+' => {
                     chars.next();
@@ -166,12 +182,12 @@ mod ast {
     #[derive(Debug)]
     pub enum Stmt {
         Let(String, Expr),
-        Print(String),
+        Print(Expr),                            // 修改Print语句以支持任意表达式
         If(Expr, Vec<Stmt>, Option<Vec<Stmt>>), // 条件，真分支，假分支(可选)
     }
 
     impl Stmt {
-        pub fn parse_file(tokens: &[Token]) -> Vec<Stmt> {
+        pub fn parse_tokens(tokens: &[Token]) -> Vec<Stmt> {
             let mut pos = 0;
             let mut stmts = Vec::new();
 
@@ -208,15 +224,8 @@ mod ast {
                 }
                 Token::Print => {
                     *pos += 1;
-                    if *pos >= tokens.len() {
-                        panic!("Unexpected end of tokens in print statement");
-                    }
-                    if let Token::Var(ref var_name) = tokens[*pos] {
-                        *pos += 1;
-                        Stmt::Print(var_name.clone())
-                    } else {
-                        panic!("Expected variable name in print statement");
-                    }
+                    let expr = Expr::parse_expr(tokens, pos);
+                    Stmt::Print(expr)
                 }
                 Token::If => {
                     *pos += 1;
@@ -235,7 +244,8 @@ mod ast {
                 if *pos < tokens.len() && tokens[*pos] == Token::If {
                     *pos += 1; // skip 'if'
                     let expr = Expr::parse_comparison_op(tokens, pos);
-                    let (elif_true_branch, elif_false_branch) = Self::parse_if_branches(tokens, pos);
+                    let (elif_true_branch, elif_false_branch) =
+                        Self::parse_if_branches(tokens, pos);
                     let elif_stmt = Stmt::If(expr, elif_true_branch, elif_false_branch);
                     Some(vec![elif_stmt])
                 } else {
@@ -283,105 +293,104 @@ mod ast {
     pub enum Expr {
         Number(i32),
         Var(String),
+        Str(String), // 新增字符串表达式
         Add(Box<Expr>, Box<Expr>),
         Sub(Box<Expr>, Box<Expr>),
         Mul(Box<Expr>, Box<Expr>),
         Div(Box<Expr>, Box<Expr>),
         Mod(Box<Expr>, Box<Expr>),
-        Compare(Box<Expr>, CompareOp, Box<Expr>),
+        Compare(Box<Expr>, CompareOp, Box<Expr>), // 添加比较运算
     }
 
     impl Expr {
         pub fn parse_expr(tokens: &[Token], pos: &mut usize) -> Expr {
-            Self::parse_expr_bp(tokens, pos, 0)
+            Self::parse_add_sub(tokens, pos)
         }
 
-        fn parse_expr_bp(tokens: &[Token], pos: &mut usize, min_bp: u8) -> Expr {
-            if *pos >= tokens.len() {
-                panic!("Unexpected end of tokens");
+        fn parse_add_sub(tokens: &[Token], pos: &mut usize) -> Expr {
+            let mut expr = Self::parse_mul_div(tokens, pos);
+
+            while *pos < tokens.len() {
+                match tokens[*pos] {
+                    Token::Add => {
+                        *pos += 1;
+                        let rhs = Self::parse_mul_div(tokens, pos);
+                        expr = Expr::Add(Box::new(expr), Box::new(rhs));
+                    }
+                    Token::Sub => {
+                        *pos += 1;
+                        let rhs = Self::parse_mul_div(tokens, pos);
+                        expr = Expr::Sub(Box::new(expr), Box::new(rhs));
+                    }
+                    _ => break,
+                }
             }
 
-            let mut lhs = match &tokens[*pos] {
+            expr
+        }
+
+        fn parse_mul_div(tokens: &[Token], pos: &mut usize) -> Expr {
+            let mut expr = Self::parse_factor(tokens, pos);
+
+            while *pos < tokens.len() {
+                match tokens[*pos] {
+                    Token::Mul => {
+                        *pos += 1;
+                        let rhs = Self::parse_factor(tokens, pos);
+                        expr = Expr::Mul(Box::new(expr), Box::new(rhs));
+                    }
+                    Token::Div => {
+                        *pos += 1;
+                        let rhs = Self::parse_factor(tokens, pos);
+                        expr = Expr::Div(Box::new(expr), Box::new(rhs));
+                    }
+                    Token::Mod => {
+                        *pos += 1;
+                        let rhs = Self::parse_factor(tokens, pos);
+                        expr = Expr::Mod(Box::new(expr), Box::new(rhs));
+                    }
+                    _ => break,
+                }
+            }
+
+            expr
+        }
+
+        fn parse_factor(tokens: &[Token], pos: &mut usize) -> Expr {
+            let token = &tokens[*pos];
+            *pos += 1;
+
+            match token {
+                Token::Number(n) => Expr::Number(*n),
+                Token::Var(var_name) => Expr::Var(var_name.clone()),
+                Token::Str(s) => Expr::Str(s.clone()), // 处理字符串字面量
                 Token::LParen => {
-                    *pos += 1;
-                    let expr = Self::parse_expr_bp(tokens, pos, 0);
+                    let expr = Self::parse_expr(tokens, pos);
                     if *pos >= tokens.len() || tokens[*pos] != Token::RParen {
                         panic!("Expected closing parenthesis");
                     }
-                    *pos += 1; // Skip ')'
+                    *pos += 1; // skip ')'
                     expr
                 }
-                Token::Number(n) => {
-                    *pos += 1;
-                    Expr::Number(*n)
-                }
-                Token::Var(name) => {
-                    *pos += 1;
-                    Expr::Var(name.clone())
-                }
-                _ => panic!("Unexpected token: {:?}", tokens[*pos]),
-            };
-
-            loop {
-                if *pos >= tokens.len() {
-                    break;
-                }
-
-                let op = match &tokens[*pos] {
-                    Token::Add => "+",
-                    Token::Sub => "-",
-                    Token::Mul => "*",
-                    Token::Div => "/",
-                    Token::Mod => "%",
-                    _ => break,
-                };
-
-                let (l_bp, r_bp) = match op {
-                    "+" => (1, 2),
-                    "-" => (1, 2),
-                    "*" => (3, 4),
-                    "/" => (3, 4),
-                    "%" => (3, 4),
-                    _ => break,
-                };
-
-                if l_bp < min_bp {
-                    break;
-                }
-
-                *pos += 1;
-
-                let rhs = Self::parse_expr_bp(tokens, pos, r_bp);
-
-                lhs = match op {
-                    "+" => Expr::Add(Box::new(lhs), Box::new(rhs)),
-                    "-" => Expr::Sub(Box::new(lhs), Box::new(rhs)),
-                    "*" => Expr::Mul(Box::new(lhs), Box::new(rhs)),
-                    "/" => Expr::Div(Box::new(lhs), Box::new(rhs)),
-                    "%" => Expr::Mod(Box::new(lhs), Box::new(rhs)),
-                    _ => unreachable!(),
-                };
+                _ => panic!("Unexpected token: {:?}", token),
             }
-
-            lhs
         }
 
         pub fn parse_comparison_op(tokens: &[Token], pos: &mut usize) -> Expr {
-            let lhs = Self::parse_expr_bp(tokens, pos, 0);
+            let lhs = Self::parse_expr(tokens, pos);
 
-            let op = match &tokens[*pos] {
+            let op = match tokens[*pos] {
                 Token::Eq => CompareOp::Eq,
                 Token::Neq => CompareOp::Neq,
                 Token::Lt => CompareOp::Lt,
-                Token::Le => CompareOp::Le,
                 Token::Gt => CompareOp::Gt,
+                Token::Le => CompareOp::Le,
                 Token::Ge => CompareOp::Ge,
-                _ => panic!("Unexpected token: {:?}", tokens[*pos]),
+                _ => panic!("Unexpected token in comparison: {:?}", tokens[*pos]),
             };
             *pos += 1;
 
-            let rhs = Self::parse_expr_bp(tokens, pos, 0);
-
+            let rhs = Self::parse_expr(tokens, pos);
             Expr::Compare(Box::new(lhs), op, Box::new(rhs))
         }
     }
@@ -389,269 +398,154 @@ mod ast {
 
 mod vm {
     use crate::ast::{CompareOp, Expr, Stmt};
-    use crate::lexer::tokenize;
-    use std::collections::HashMap;
-    use std::fs::File;
-    use std::io::{self, prelude::*, BufReader, Error};
-    use std::str::FromStr;
 
-    pub struct Vm {
-        instructions: Vec<Instruction>,
-        context: HashMap<String, i32>,
+    use std::collections::HashMap;
+
+    #[derive(Debug, Clone)]
+    pub enum Value {
+        Number(i32),
+        Str(String), // 添加字符串值
     }
 
-    impl Vm {
+    pub struct VM {
+        variables: HashMap<String, Value>,
+    }
+
+    impl VM {
         pub fn new() -> Self {
-            Vm {
-                instructions: Vec::new(),
-                context: HashMap::new(),
+            VM {
+                variables: HashMap::new(),
             }
         }
 
-        pub fn parse_file(&mut self, filename: &str) -> Result<(), Error> {
-            let file = File::open(filename)?;
-            let mut reader = BufReader::new(file);
-            let mut file_content = String::new();
-            reader.read_to_string(&mut file_content)?;
-
-            let tokens = tokenize(&file_content);
-            let stmts = Stmt::parse_file(&tokens);
+        pub fn run(&mut self, stmts: &[Stmt]) {
             for stmt in stmts {
-                self.compile(&stmt);
+                self.run_stmt(stmt);
             }
-            Ok(())
         }
 
-        pub fn compile(&mut self, stmt: &Stmt) {
+        fn run_stmt(&mut self, stmt: &Stmt) {
             match stmt {
                 Stmt::Let(var_name, expr) => {
-                    self.compile_expr(expr);
-                    self.instructions.push(Instruction::Store(var_name.clone()));
+                    let value = self.eval_expr(expr);
+                    self.variables.insert(var_name.clone(), value);
                 }
-                Stmt::Print(var_name) => {
-                    self.instructions.push(Instruction::Load(var_name.clone()));
-                    self.instructions.push(Instruction::Print);
-                }
-                Stmt::If(cond, true_branch, false_branch) => {
-                    self.compile_expr(cond);
-                    let jmp_if_false_index = self.instructions.len();
-                    self.instructions.push(Instruction::JmpIfFalse(0)); // placeholder
-
-                    for stmt in true_branch {
-                        self.compile(stmt);
+                Stmt::Print(expr) => {
+                    let value = self.eval_expr(expr);
+                    match value {
+                        Value::Number(n) => println!("{}", n),
+                        Value::Str(s) => println!("{}", s), // 支持打印字符串
                     }
+                }
+                Stmt::If(cond_expr, true_branch, false_branch) => {
+                    let cond_value = self.eval_expr(cond_expr);
+                    let cond_bool = match cond_value {
+                        Value::Number(n) => n != 0,
+                        Value::Str(s) => !s.is_empty(), // 非空字符串视为真
+                    };
 
-                    if let Some(false_branch) = false_branch {
-                        let jmp_index = self.instructions.len();
-                        self.instructions.push(Instruction::Jmp(0)); // placeholder
-
-                        let false_branch_index = self.instructions.len();
-                        self.instructions[jmp_if_false_index] =
-                            Instruction::JmpIfFalse(false_branch_index);
-
-                        for stmt in false_branch {
-                            self.compile(stmt);
-                        }
-
-                        let end_index = self.instructions.len();
-                        self.instructions[jmp_index] = Instruction::Jmp(end_index);
-                    } else {
-                        let end_index = self.instructions.len();
-                        self.instructions[jmp_if_false_index] = Instruction::JmpIfFalse(end_index);
+                    if cond_bool {
+                        self.run(true_branch);
+                    } else if let Some(false_branch) = false_branch {
+                        self.run(false_branch);
                     }
                 }
             }
         }
 
-        fn compile_expr(&mut self, expr: &Expr) {
+        fn eval_expr(&self, expr: &Expr) -> Value {
             match expr {
-                Expr::Number(n) => self.instructions.push(Instruction::Push(*n)),
-                Expr::Var(name) => self.instructions.push(Instruction::Load(name.clone())),
-                Expr::Add(left, right) => {
-                    self.compile_expr(left);
-                    self.compile_expr(right);
-                    self.instructions.push(Instruction::Add);
-                }
-                Expr::Sub(left, right) => {
-                    self.compile_expr(left);
-                    self.compile_expr(right);
-                    self.instructions.push(Instruction::Sub);
-                }
-                Expr::Mul(left, right) => {
-                    self.compile_expr(left);
-                    self.compile_expr(right);
-                    self.instructions.push(Instruction::Mul);
-                }
-                Expr::Div(left, right) => {
-                    self.compile_expr(left);
-                    self.compile_expr(right);
-                    self.instructions.push(Instruction::Div);
-                }
-                Expr::Mod(left, right) => {
-                    self.compile_expr(left);
-                    self.compile_expr(right);
-                    self.instructions.push(Instruction::Mod);
-                }
-                Expr::Compare(left, op, right) => {
-                    self.compile_expr(left);
-                    self.compile_expr(right);
-                    match op {
-                        CompareOp::Eq => self.instructions.push(Instruction::Eq),
-                        CompareOp::Neq => self.instructions.push(Instruction::Neq),
-                        CompareOp::Lt => self.instructions.push(Instruction::Lt),
-                        CompareOp::Le => self.instructions.push(Instruction::Le),
-                        CompareOp::Gt => self.instructions.push(Instruction::Gt),
-                        CompareOp::Ge => self.instructions.push(Instruction::Ge),
-                    }
-                }
-            }
-        }
-
-        pub fn execute(&mut self) -> i32 {
-            let mut stack = Vec::new();
-            let mut ip = 0; // instruction pointer
-
-            while ip < self.instructions.len() {
-                match &self.instructions[ip] {
-                    Instruction::Push(n) => stack.push(*n),
-                    Instruction::Load(var_name) => {
-                        if let Some(value) = self.context.get(var_name) {
-                            stack.push(*value);
-                        } else {
-                            panic!("Undefined variable: {}", var_name);
+                Expr::Number(n) => Value::Number(*n),
+                Expr::Var(var_name) => self
+                    .variables
+                    .get(var_name)
+                    .cloned()
+                    .unwrap_or(Value::Number(0)),
+                Expr::Str(s) => Value::Str(s.clone()), // 处理字符串表达式
+                Expr::Add(lhs, rhs) => {
+                    let lhs_val = self.eval_expr(lhs);
+                    let rhs_val = self.eval_expr(rhs);
+                    match (lhs_val, rhs_val) {
+                        (Value::Number(lhs_num), Value::Number(rhs_num)) => {
+                            Value::Number(lhs_num + rhs_num)
                         }
-                    }
-                    Instruction::Store(var_name) => {
-                        let value = stack.pop().expect("no value to store");
-                        self.context.insert(var_name.clone(), value);
-                    }
-                    Instruction::Add => {
-                        let right = stack.pop().expect("no right operand");
-                        let left = stack.pop().expect("no left operand");
-                        stack.push(left + right);
-                    }
-                    Instruction::Sub => {
-                        let right = stack.pop().expect("no right operand");
-                        let left = stack.pop().expect("no left operand");
-                        stack.push(left - right);
-                    }
-                    Instruction::Mul => {
-                        let right = stack.pop().expect("no right operand");
-                        let left = stack.pop().expect("no left operand");
-                        stack.push(left * right);
-                    }
-                    Instruction::Div => {
-                        let right = stack.pop().expect("no right operand");
-                        let left = stack.pop().expect("no left operand");
-                        stack.push(left / right);
-                    }
-                    Instruction::Mod => {
-                        let right = stack.pop().expect("no right operand");
-                        let left = stack.pop().expect("no left operand");
-                        stack.push(left % right);
-                    }
-                    Instruction::Eq => {
-                        let right = stack.pop().expect("no right operand");
-                        let left = stack.pop().expect("no left operand");
-                        stack.push((left == right) as i32);
-                    }
-                    Instruction::Neq => {
-                        let right = stack.pop().expect("no right operand");
-                        let left = stack.pop().expect("no left operand");
-                        stack.push((left != right) as i32);
-                    }
-                    Instruction::Lt => {
-                        let right = stack.pop().expect("no right operand");
-                        let left = stack.pop().expect("no left operand");
-                        stack.push((left < right) as i32);
-                    }
-                    Instruction::Le => {
-                        let right = stack.pop().expect("no right operand");
-                        let left = stack.pop().expect("no left operand");
-                        stack.push((left <= right) as i32);
-                    }
-                    Instruction::Gt => {
-                        let right = stack.pop().expect("no right operand");
-                        let left = stack.pop().expect("no left operand");
-                        stack.push((left > right) as i32);
-                    }
-                    Instruction::Ge => {
-                        let right = stack.pop().expect("no right operand");
-                        let left = stack.pop().expect("no left operand");
-                        stack.push((left >= right) as i32);
-                    }
-                    Instruction::JmpIfFalse(target) => {
-                        let value = stack.pop().expect("no value to test");
-                        if value == 0 {
-                            ip = *target;
-                            continue;
-                        }
-                    }
-                    Instruction::Jmp(target) => {
-                        ip = *target;
-                        continue;
-                    }
-                    Instruction::Print => {
-                        let value = stack.pop().expect("no value to print");
-                        println!("{}", value);
+                        _ => panic!("Unsupported operand types for +"),
                     }
                 }
-                ip += 1;
-            }
-            stack.pop().unwrap_or(0)
-        }
-    }
-
-    pub enum Instruction {
-        Push(i32),         // 压栈
-        Load(String),      // 加载变量
-        Store(String),     // 存储变量
-        Add,               // 加
-        Sub,               // 减
-        Mul,               // 乘
-        Div,               // 除
-        Mod,               // 取模
-        Eq,                // 等于
-        Neq,               // 不等于
-        Lt,                // 小于
-        Le,                // 小于等于
-        Gt,                // 大于
-        Ge,                // 大于等于
-        JmpIfFalse(usize), // 条件跳转
-        Jmp(usize),        // 无条件跳转
-        Print,             // 打印
-    }
-
-    impl FromStr for Instruction {
-        type Err = Error;
-
-        fn from_str(s: &str) -> Result<Self, Self::Err> {
-            let parts: Vec<&str> = s.split_whitespace().collect();
-            match parts[0] {
-                "push" => Ok(Instruction::Push(parts[1].parse().unwrap())),
-                "Add" => Ok(Instruction::Add),
-                _ => Err(io::Error::new(
-                    io::ErrorKind::InvalidInput,
-                    "Invalid instruction",
-                )),
+                Expr::Sub(lhs, rhs) => {
+                    let lhs_val = self.eval_expr(lhs);
+                    let rhs_val = self.eval_expr(rhs);
+                    match (lhs_val, rhs_val) {
+                        (Value::Number(lhs_num), Value::Number(rhs_num)) => {
+                            Value::Number(lhs_num - rhs_num)
+                        }
+                        _ => panic!("Unsupported operand types for -"),
+                    }
+                }
+                Expr::Mul(lhs, rhs) => {
+                    let lhs_val = self.eval_expr(lhs);
+                    let rhs_val = self.eval_expr(rhs);
+                    match (lhs_val, rhs_val) {
+                        (Value::Number(lhs_num), Value::Number(rhs_num)) => {
+                            Value::Number(lhs_num * rhs_num)
+                        }
+                        _ => panic!("Unsupported operand types for *"),
+                    }
+                }
+                Expr::Div(lhs, rhs) => {
+                    let lhs_val = self.eval_expr(lhs);
+                    let rhs_val = self.eval_expr(rhs);
+                    match (lhs_val, rhs_val) {
+                        (Value::Number(lhs_num), Value::Number(rhs_num)) => {
+                            Value::Number(lhs_num / rhs_num)
+                        }
+                        _ => panic!("Unsupported operand types for /"),
+                    }
+                }
+                Expr::Mod(lhs, rhs) => {
+                    let lhs_val = self.eval_expr(lhs);
+                    let rhs_val = self.eval_expr(rhs);
+                    match (lhs_val, rhs_val) {
+                        (Value::Number(lhs_num), Value::Number(rhs_num)) => {
+                            Value::Number(lhs_num % rhs_num)
+                        }
+                        _ => panic!("Unsupported operand types for %"),
+                    }
+                }
+                Expr::Compare(lhs, op, rhs) => {
+                    let lhs_val = self.eval_expr(lhs);
+                    let rhs_val = self.eval_expr(rhs);
+                    match (lhs_val, rhs_val) {
+                        (Value::Number(lhs_num), Value::Number(rhs_num)) => {
+                            let result = match op {
+                                CompareOp::Eq => lhs_num == rhs_num,
+                                CompareOp::Neq => lhs_num != rhs_num,
+                                CompareOp::Lt => lhs_num < rhs_num,
+                                CompareOp::Gt => lhs_num > rhs_num,
+                                CompareOp::Le => lhs_num <= rhs_num,
+                                CompareOp::Ge => lhs_num >= rhs_num,
+                            };
+                            Value::Number(result as i32)
+                        }
+                        _ => panic!("Unsupported operand types for comparison"),
+                    }
+                }
             }
         }
     }
 }
 
-use crate::vm::Vm;
+use ast::Stmt;
+use lexer::tokenize;
+use vm::VM;
 
-fn main() -> io::Result<()> {
-    let path = "source.nl";
+fn main() {
+    let mut source = String::new();
+    let mut source_file = File::open("source.nl").unwrap();
+    _ = source_file.read_to_string(&mut source);
 
-    let mut vm = Vm::new();
-    vm.parse_file(&path)?;
-    vm.execute();
-
-    let fi_filepath = "source_if.nl";
-    vm = Vm::new();
-    vm.parse_file(&fi_filepath)?;
-    vm.execute();
-
-    Ok(())
+    let tokens = tokenize(source.as_str());
+    let ast = Stmt::parse_tokens(&tokens);
+    let mut vm = VM::new();
+    vm.run(&ast);
 }
