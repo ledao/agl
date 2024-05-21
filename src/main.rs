@@ -64,7 +64,7 @@ mod lexer {
                         "print" => Token::Print,
                         "if" => Token::If,
                         "else" => Token::Else,
-                        "struct" => Token::Struct, // 支持 struct 关键字
+                        "struct" => Token::Struct,
                         _ => Token::Var(ident),
                     });
                 }
@@ -198,8 +198,8 @@ mod ast {
         Let(String, Expr),
         Print(Expr),
         If(Expr, Vec<Stmt>, Option<Vec<Stmt>>),
-        StructDef(String, Vec<(String, String)>), // 定义结构体
-        StructInstance(String, String, Vec<(String, Expr)>), // 实例化结构体))
+        StructDef(String, Vec<(String, String)>),
+        StructInstance(String, String, Vec<(String, Expr)>),
     }
 
     impl Stmt {
@@ -231,8 +231,6 @@ mod ast {
                         if *pos >= tokens.len() || tokens[*pos] != Token::Assign {
                             panic!("Expected '=' in let statement");
                         }
-                        // *pos += 1;
-                        // let expr = Expr::parse_expr(tokens, pos);
                         *pos += 1;
                         if *pos < tokens.len() {
                             match &tokens[*pos] {
@@ -318,36 +316,32 @@ mod ast {
                                     panic!("Expected ':' in struct definition");
                                 }
                                 *pos += 1;
-                                if let Token::Var(ref field_type) = tokens[*pos] {
-                                    fields.push((field_name.clone(), field_type.clone()));
-                                    *pos += 1;
-                                } else {
-                                    panic!("Expected type in struct definition");
+                                if *pos >= tokens.len() {
+                                    panic!("Unexpected end of tokens in struct definition");
                                 }
-                                if *pos < tokens.len() && tokens[*pos] == Token::Comma {
+                                if let Token::Var(ref field_type) = tokens[*pos] {
                                     *pos += 1;
+                                    fields.push((field_name.clone(), field_type.clone()));
+                                    if *pos < tokens.len() && tokens[*pos] == Token::Comma {
+                                        *pos += 1;
+                                    }
+                                } else {
+                                    panic!("Expected type name in struct definition");
                                 }
                             } else {
-                                panic!(
-                                    "Expected field name in struct definition, {:?}",
-                                    tokens[*pos]
-                                );
+                                panic!("Expected field name in struct definition");
                             }
                         }
                         if *pos >= tokens.len() || tokens[*pos] != Token::RBrace {
                             panic!("Expected '}}' in struct definition");
                         }
                         *pos += 1;
-                        Stmt::StructDef(struct_name.clone(), fields)
+                        return Stmt::StructDef(struct_name.clone(), fields);
                     } else {
-                        panic!("Expected struct name");
+                        panic!("Expected struct name in struct definition");
                     }
                 }
-                _ => panic!(
-                    "Invalid statement at token: {:?} {:?}",
-                    tokens[*pos],
-                    tokens[*pos - 1]
-                ),
+                _ => panic!("Unexpected token in statement: {:?}", tokens[*pos]),
             }
         }
 
@@ -372,13 +366,13 @@ mod ast {
         }
 
         fn parse_block(tokens: &[Token], pos: &mut usize) -> Vec<Stmt> {
-            let mut stmts = Vec::new();
             if *pos >= tokens.len() || tokens[*pos] != Token::LBrace {
-                panic!("Expected '{{' at start of block");
+                panic!("Expected '{{' to start block");
             }
             *pos += 1;
+            let mut stmts = Vec::new();
             while *pos < tokens.len() && tokens[*pos] != Token::RBrace {
-                if Token::NewLine == tokens[*pos] {
+                if tokens[*pos] == Token::NewLine {
                     *pos += 1;
                     continue;
                 }
@@ -386,7 +380,7 @@ mod ast {
                 stmts.push(stmt);
             }
             if *pos >= tokens.len() || tokens[*pos] != Token::RBrace {
-                panic!("Expected '}}' at end of block");
+                panic!("Expected '}}' to end block");
             }
             *pos += 1;
             stmts
@@ -398,112 +392,86 @@ mod ast {
         Number(i32),
         Var(String),
         Str(String),
-        Binary(Box<Expr>, Token, Box<Expr>),
-        FieldAccess(Box<Expr>, String), // 新增的字段访问节点
-        StructInstance(String, Vec<(String, Expr)>), // 新增的实例化结构体节点
+        BinOp(Box<Expr>, BinOp, Box<Expr>),
+        StructField(Box<Expr>, String), // 结构体字段
     }
 
     impl Expr {
-        pub fn parse_expr(tokens: &[Token], pos: &mut usize) -> Expr {
+        fn parse_expr(tokens: &[Token], pos: &mut usize) -> Expr {
             Self::parse_add_sub(tokens, pos)
         }
 
         fn parse_add_sub(tokens: &[Token], pos: &mut usize) -> Expr {
-            let mut node = Self::parse_mul_div_mod(tokens, pos);
-
+            let mut lhs = Self::parse_mul_div_mod(tokens, pos);
             while *pos < tokens.len() {
                 match tokens[*pos] {
                     Token::Add => {
                         *pos += 1;
-                        let right = Self::parse_mul_div_mod(tokens, pos);
-                        node = Expr::Binary(Box::new(node), Token::Add, Box::new(right));
+                        let rhs = Self::parse_mul_div_mod(tokens, pos);
+                        lhs = Expr::BinOp(Box::new(lhs), BinOp::Add, Box::new(rhs));
                     }
                     Token::Sub => {
                         *pos += 1;
-                        let right = Self::parse_mul_div_mod(tokens, pos);
-                        node = Expr::Binary(Box::new(node), Token::Sub, Box::new(right));
+                        let rhs = Self::parse_mul_div_mod(tokens, pos);
+                        lhs = Expr::BinOp(Box::new(lhs), BinOp::Sub, Box::new(rhs));
                     }
                     _ => break,
                 }
             }
-
-            node
+            lhs
         }
 
         fn parse_mul_div_mod(tokens: &[Token], pos: &mut usize) -> Expr {
-            if *pos == 95 {
-                println!("95");
-            }
-            let mut node = Self::parse_primary(tokens, pos);
-
+            let mut lhs = Self::parse_primary(tokens, pos);
             while *pos < tokens.len() {
                 match tokens[*pos] {
                     Token::Mul => {
                         *pos += 1;
-                        let right = Self::parse_primary(tokens, pos);
-                        node = Expr::Binary(Box::new(node), Token::Mul, Box::new(right));
+                        let rhs = Self::parse_primary(tokens, pos);
+                        lhs = Expr::BinOp(Box::new(lhs), BinOp::Mul, Box::new(rhs));
                     }
                     Token::Div => {
                         *pos += 1;
-                        let right = Self::parse_primary(tokens, pos);
-                        node = Expr::Binary(Box::new(node), Token::Div, Box::new(right));
+                        let rhs = Self::parse_primary(tokens, pos);
+                        lhs = Expr::BinOp(Box::new(lhs), BinOp::Div, Box::new(rhs));
                     }
                     Token::Mod => {
                         *pos += 1;
-                        let right = Self::parse_primary(tokens, pos);
-                        node = Expr::Binary(Box::new(node), Token::Mod, Box::new(right));
+                        let rhs = Self::parse_primary(tokens, pos);
+                        lhs = Expr::BinOp(Box::new(lhs), BinOp::Mod, Box::new(rhs));
                     }
                     _ => break,
                 }
             }
-
-            node
+            lhs
         }
 
         fn parse_primary(tokens: &[Token], pos: &mut usize) -> Expr {
-            match tokens[*pos] {
+            if *pos >= tokens.len() {
+                panic!("Unexpected end of tokens in expression");
+            }
+            match &tokens[*pos] {
                 Token::Number(n) => {
                     *pos += 1;
-                    Expr::Number(n)
+                    Expr::Number(*n)
                 }
-                Token::Var(ref var_name) => {
+                Token::Var(var_name) => {
                     *pos += 1;
-                    if *pos < tokens.len() && tokens[*pos] == Token::LBrace {
+                    if *pos < tokens.len() && tokens[*pos] == Token::Dot {
                         *pos += 1;
-                        let mut fields = Vec::new();
-                        while *pos < tokens.len() && tokens[*pos] != Token::RBrace {
-                            if Token::NewLine == tokens[*pos] {
-                                *pos += 1;
-                                continue;
-                            }
-                            if let Token::Var(ref field_name) = tokens[*pos] {
-                                *pos += 1;
-                                if *pos >= tokens.len() || tokens[*pos] != Token::Colon {
-                                    panic!("Expected ':' in struct instance");
-                                }
-                                *pos += 1;
-                                let expr = Expr::parse_expr(tokens, pos);
-                                fields.push((field_name.clone(), expr));
-                                if *pos < tokens.len() && tokens[*pos] == Token::Comma {
-                                    *pos += 1;
-                                }
-                            } else {
-                                panic!(
-                                    "Expected field name in struct instance, {:?}",
-                                    tokens[*pos]
-                                );
-                            }
+                        if let Token::Var(field_name) = &tokens[*pos] {
+                            *pos += 1;
+                            return Expr::StructField(
+                                Box::new(Expr::Var(var_name.clone())),
+                                field_name.clone(),
+                            );
+                        } else {
+                            panic!("Expected field name after '.' in struct field access");
                         }
-                        if *pos >= tokens.len() || tokens[*pos] != Token::RBrace {
-                            panic!("Expected '}}' in struct instance");
-                        }
-                        *pos += 1;
-                        Expr::StructInstance(var_name.clone(), fields)
-                    } else {
-                        Expr::Var(var_name.clone())
                     }
+                    Expr::Var(var_name.clone())
                 }
-                Token::Str(ref s) => {
+                Token::Str(s) => {
                     *pos += 1;
                     Expr::Str(s.clone())
                 }
@@ -516,66 +484,77 @@ mod ast {
                     *pos += 1;
                     expr
                 }
-                _ => panic!("Unexpected token: {:?}", tokens[*pos]),
+                _ => panic!("Unexpected token in primary expression: {:?}", tokens[*pos]),
             }
         }
 
         fn parse_comparison_op(tokens: &[Token], pos: &mut usize) -> Expr {
-            let mut left = Self::parse_add_sub(tokens, pos);
-
-            while *pos < tokens.len() {
-                match tokens[*pos] {
-                    Token::Eq | Token::Neq | Token::Lt | Token::Gt | Token::Le | Token::Ge => {
-                        let op = tokens[*pos].clone();
-                        *pos += 1;
-                        let right = Self::parse_add_sub(tokens, pos);
-                        left = Expr::Binary(Box::new(left), op, Box::new(right));
-                    }
-                    _ => break,
-                }
-            }
-
-            left
-        }
-    }
-}
-
-mod vm {
-    use crate::ast::{Expr, Stmt};
-    use std::{collections::HashMap, fmt::Display};
-
-    #[derive(Debug, Clone)]
-    pub enum Value {
-        Number(i32),
-        Str(String),
-        Struct(HashMap<String, Value>), // 新增结构体类型
-    }
-
-    impl Display for Value {
-        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            match self {
-                Value::Number(n) => write!(f, "{}", n),
-                Value::Str(s) => write!(f, "{}", s),
-                Value::Struct(fields) => write!(f, "{:?}", fields),
+            let lhs = Self::parse_add_sub(tokens, pos);
+            if *pos < tokens.len() {
+                let op = match tokens[*pos] {
+                    Token::Eq => BinOp::Eq,
+                    Token::Neq => BinOp::Neq,
+                    Token::Lt => BinOp::Lt,
+                    Token::Gt => BinOp::Gt,
+                    Token::Le => BinOp::Le,
+                    Token::Ge => BinOp::Ge,
+                    _ => return lhs,
+                };
+                *pos += 1;
+                let rhs = Self::parse_add_sub(tokens, pos);
+                Expr::BinOp(Box::new(lhs), op, Box::new(rhs))
+            } else {
+                lhs
             }
         }
     }
 
     #[derive(Debug)]
+    pub enum BinOp {
+        Add,
+        Sub,
+        Mul,
+        Div,
+        Mod,
+        Eq,
+        Neq,
+        Lt,
+        Gt,
+        Le,
+        Ge,
+    }
+}
+
+mod vm {
+    use crate::ast::{BinOp, Expr, Stmt};
+    use std::collections::HashMap;
+
     pub struct VM {
         variables: HashMap<String, Value>,
-        structs: HashMap<String, Vec<String>>, // 存储结构体定义
+        structs: HashMap<String, StructDef>,
+    }
+
+    #[derive(Debug, Clone)]
+    pub enum Value {
+        Number(i32),
+        Str(String),
+        StructInstance(HashMap<String, Value>),
+    }
+
+    #[derive(Debug, Clone)]
+    pub struct StructDef {
+        fields: HashMap<String, String>,
     }
 
     impl VM {
-        pub fn new() -> VM {
+        pub fn new() -> Self {
             VM {
                 variables: HashMap::new(),
                 structs: HashMap::new(),
             }
         }
 
-        pub fn interpret(&mut self, stmts: &[Stmt]) {
+        pub fn run(&mut self, stmts: &[Stmt]) {
             for stmt in stmts {
                 self.execute_stmt(stmt);
             }
@@ -583,105 +562,111 @@ mod vm {
 
         fn execute_stmt(&mut self, stmt: &Stmt) {
             match stmt {
-                Stmt::Let(name, expr) => {
+                Stmt::Let(var_name, expr) => {
                     let value = self.evaluate_expr(expr);
-                    self.variables.insert(name.clone(), value);
+                    self.variables.insert(var_name.clone(), value);
                 }
                 Stmt::Print(expr) => {
                     let value = self.evaluate_expr(expr);
-                    println!("{}", value);
+                    println!("{:?}", value);
                 }
-                Stmt::If(expr, true_branch, false_branch) => {
-                    let condition = self.evaluate_expr(expr);
-                    if let Value::Number(n) = condition {
-                        if n != 0 {
-                            self.interpret(true_branch);
-                        } else if let Some(branch) = false_branch {
-                            self.interpret(branch);
-                        }
-                    } else {
-                        panic!("Condition of if statement is not a number");
+                Stmt::If(cond, true_branch, false_branch) => {
+                    if self.evaluate_cond(cond) {
+                        self.run(true_branch);
+                    } else if let Some(false_branch) = false_branch {
+                        self.run(false_branch);
                     }
                 }
                 Stmt::StructDef(name, fields) => {
-                    let field_names = fields.iter().map(|(f, _)| f.clone()).collect();
-                    self.structs.insert(name.clone(), field_names);
+                    let mut field_map = HashMap::new();
+                    for (field_name, field_type) in fields {
+                        field_map.insert(field_name.clone(), field_type.clone());
+                    }
+                    self.structs
+                        .insert(name.clone(), StructDef { fields: field_map });
                 }
                 Stmt::StructInstance(var_name, struct_name, fields) => {
-                    if let Some(field_names) = self.structs.get(struct_name).cloned() {
-                        let mut struct_values = HashMap::new();
+                    if let Some(struct_def) = self.structs.get(struct_name) {
+                        let mut instance = HashMap::new();
                         for (field_name, expr) in fields {
-                            if field_names.contains(field_name) {
-                                let value = self.evaluate_expr(expr);
-                                struct_values.insert(field_name.clone(), value);
+                            let value = self.evaluate_expr(expr);
+                            if let Some(_field_type) = struct_def.fields.get(field_name) {
+                                instance.insert(field_name.clone(), value);
                             } else {
                                 panic!(
-                                    "Undefined field: {} for struct {}",
+                                    "Field '{}' not found in struct '{}'",
                                     field_name, struct_name
                                 );
                             }
                         }
                         self.variables
-                            .insert(var_name.clone(), Value::Struct(struct_values));
+                            .insert(var_name.clone(), Value::StructInstance(instance));
                     } else {
-                        panic!("Unknown struct {}", struct_name);
+                        panic!("Struct '{}' not defined", struct_name);
                     }
                 }
             }
         }
 
-        fn evaluate_expr(&mut self, expr: &Expr) -> Value {
+        fn evaluate_expr(&self, expr: &Expr) -> Value {
             match expr {
                 Expr::Number(n) => Value::Number(*n),
-                Expr::Var(name) => {
-                    if let Some(value) = self.variables.get(name) {
+                Expr::Var(var_name) => {
+                    if let Some(value) = self.variables.get(var_name) {
                         value.clone()
                     } else {
-                        panic!("Undefined variable: {}", name);
+                        panic!("Variable '{}' not found", var_name);
                     }
                 }
                 Expr::Str(s) => Value::Str(s.clone()),
-                Expr::Binary(left, op, right) => {
-                    let left_val = self.evaluate_expr(left);
-                    let right_val = self.evaluate_expr(right);
-                    match (left_val, right_val) {
-                        (Value::Number(l), Value::Number(r)) => match op {
-                            crate::lexer::Token::Add => Value::Number(l + r),
-                            crate::lexer::Token::Sub => Value::Number(l - r),
-                            crate::lexer::Token::Mul => Value::Number(l * r),
-                            crate::lexer::Token::Div => Value::Number(l / r),
-                            crate::lexer::Token::Mod => Value::Number(l % r),
-                            crate::lexer::Token::Gt => Value::Number(if l > r { 1 } else { 0 }),
-                            crate::lexer::Token::Ge => Value::Number(if l >= r { 1 } else { 0 }),
-                            crate::lexer::Token::Lt => Value::Number(if l < r { 1 } else { 0 }),
-                            crate::lexer::Token::Le => Value::Number(if l <= r { 1 } else { 0 }),
-                            crate::lexer::Token::Eq => Value::Number(if l == r { 1 } else { 0 }),
-                            crate::lexer::Token::Neq => Value::Number(if l != r { 1 } else { 0 }),
-                            _ => panic!("Invalid binary operator, {:?}", op),
-                        },
-                        _ => panic!("Invalid operands for binary operator"),
+                Expr::BinOp(lhs, op, rhs) => {
+                    let lhs_val = self.evaluate_expr(lhs);
+                    let rhs_val = self.evaluate_expr(rhs);
+                    match (lhs_val, rhs_val, op) {
+                        (Value::Number(l), Value::Number(r), BinOp::Add) => Value::Number(l + r),
+                        (Value::Number(l), Value::Number(r), BinOp::Sub) => Value::Number(l - r),
+                        (Value::Number(l), Value::Number(r), BinOp::Mul) => Value::Number(l * r),
+                        (Value::Number(l), Value::Number(r), BinOp::Div) => Value::Number(l / r),
+                        (Value::Number(l), Value::Number(r), BinOp::Mod) => Value::Number(l % r),
+                        (Value::Number(l), Value::Number(r), BinOp::Eq) => {
+                            Value::Number((l == r) as i32)
+                        }
+                        (Value::Number(l), Value::Number(r), BinOp::Neq) => {
+                            Value::Number((l != r) as i32)
+                        }
+                        (Value::Number(l), Value::Number(r), BinOp::Lt) => {
+                            Value::Number((l < r) as i32)
+                        }
+                        (Value::Number(l), Value::Number(r), BinOp::Gt) => {
+                            Value::Number((l > r) as i32)
+                        }
+                        (Value::Number(l), Value::Number(r), BinOp::Le) => {
+                            Value::Number((l <= r) as i32)
+                        }
+                        (Value::Number(l), Value::Number(r), BinOp::Ge) => {
+                            Value::Number((l >= r) as i32)
+                        }
+                        _ => panic!("Invalid binary operation"),
                     }
                 }
-                Expr::FieldAccess(expr, field) => {
-                    let value = self.evaluate_expr(expr);
-                    if let Value::Struct(fields) = value {
-                        if let Some(field_value) = fields.get(field) {
-                            field_value.clone()
+                Expr::StructField(expr, field_name) => {
+                    if let Value::StructInstance(instance) = self.evaluate_expr(expr) {
+                        if let Some(value) = instance.get(field_name) {
+                            value.clone()
                         } else {
-                            panic!("Undefined field: {}", field);
+                            panic!("Field '{}' not found in struct instance", field_name);
                         }
                     } else {
-                        panic!("Field access on non-struct value");
+                        panic!("Expected struct instance in field access");
                     }
                 }
-                Expr::StructInstance(_name, fields) => {
-                    let mut field_values = HashMap::new();
-                    for (field_name, expr) in fields {
-                        let value = self.evaluate_expr(expr);
-                        field_values.insert(field_name.clone(), value);
-                    }
-                    Value::Struct(field_values)
-                }
+            }
+        }
+
+        fn evaluate_cond(&self, expr: &Expr) -> bool {
+            match self.evaluate_expr(expr) {
+                Value::Number(n) => n != 0,
+                _ => panic!("Expected numeric value in condition"),
             }
         }
     }
@@ -690,17 +675,17 @@ mod vm {
 use std::fs::File;
 use std::io::Read;
 
-use crate::ast::Stmt;
-use crate::lexer::tokenize;
-use crate::vm::VM;
-
 fn main() {
     let mut source = String::new();
     let mut source_file = File::open("source.nl").unwrap();
     _ = source_file.read_to_string(&mut source);
 
-    let tokens = tokenize(source.as_str());
-    let ast = Stmt::parse_tokens(&tokens);
-    let mut vm = VM::new();
-    vm.interpret(&ast);
+    let tokens = lexer::tokenize(&mut source);
+    // println!("{:?}", tokens);
+
+    let ast = ast::Stmt::parse_tokens(&tokens);
+    // println!("{:?}", ast);
+
+    let mut vm = vm::VM::new();
+    vm.run(&ast);
 }

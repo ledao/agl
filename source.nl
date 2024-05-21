@@ -24,9 +24,7 @@ if 5 > 4 {
 
 if 4 > 5 {
     print "4 > 5"
-} else if 3 < 4 {
-    print "3 < 4"
-} else {
+} else  {
     print "else"
 }
 
@@ -35,6 +33,14 @@ struct Point {
     y: i32
 }
 
-let p = Point { x: 10, y: 20 }
+let p = Point { x: 20, y: 20 }
 print(p.x)
 print(p.y)
+
+if p.x > p.y {
+    print "p.x > p.y"
+} else if p.x == p.y {
+    print "p.x == p.y"
+} else {
+    print "p.x < p.y"
+}
