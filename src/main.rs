@@ -199,6 +199,7 @@ mod ast {
         Print(Expr),
         If(Expr, Vec<Stmt>, Option<Vec<Stmt>>),
         StructDef(String, Vec<(String, String)>), // 定义结构体
+        StructInstance(String, String, Vec<(String, Expr)>), // 实例化结构体))
     }
 
     impl Stmt {
@@ -230,9 +231,58 @@ mod ast {
                         if *pos >= tokens.len() || tokens[*pos] != Token::Assign {
                             panic!("Expected '=' in let statement");
                         }
+                        // *pos += 1;
+                        // let expr = Expr::parse_expr(tokens, pos);
                         *pos += 1;
-                        let expr = Expr::parse_expr(tokens, pos);
-                        Stmt::Let(var_name.clone(), expr)
+                        if *pos < tokens.len() {
+                            match &tokens[*pos] {
+                                Token::Var(struct_name)
+                                    if *pos + 1 < tokens.len()
+                                        && tokens[*pos + 1] == Token::LBrace =>
+                                {
+                                    *pos += 2;
+                                    let mut fields = Vec::new();
+                                    while *pos < tokens.len() && tokens[*pos] != Token::RBrace {
+                                        if Token::NewLine == tokens[*pos] {
+                                            *pos += 1;
+                                            continue;
+                                        }
+                                        if let Token::Var(ref field_name) = tokens[*pos] {
+                                            *pos += 1;
+                                            if *pos >= tokens.len() || tokens[*pos] != Token::Colon
+                                            {
+                                                panic!("Expected ':' in struct instance");
+                                            }
+                                            *pos += 1;
+                                            let expr = Expr::parse_expr(tokens, pos);
+                                            fields.push((field_name.clone(), expr));
+                                            if *pos < tokens.len() && tokens[*pos] == Token::Comma {
+                                                *pos += 1;
+                                            }
+                                        } else {
+                                            panic!(
+                                                "Expected field name in struct instance, {:?}",
+                                                tokens[*pos]
+                                            );
+                                        }
+                                    }
+                                    if *pos >= tokens.len() || tokens[*pos] != Token::RBrace {
+                                        panic!("Expected '}}' in struct instance");
+                                    }
+                                    *pos += 1;
+                                    return Stmt::StructInstance(
+                                        var_name.clone(),
+                                        struct_name.clone(),
+                                        fields,
+                                    );
+                                }
+                                _ => {
+                                    let expr = Expr::parse_expr(tokens, pos);
+                                    return Stmt::Let(var_name.clone(), expr);
+                                }
+                            }
+                        }
+                        panic!("Expected expression in let statement")
                     } else {
                         panic!("Expected variable name in let statement");
                     }
@@ -278,7 +328,10 @@ mod ast {
                                     *pos += 1;
                                 }
                             } else {
-                                panic!("Expected field name in struct definition, {:?}", tokens[*pos]);
+                                panic!(
+                                    "Expected field name in struct definition, {:?}",
+                                    tokens[*pos]
+                                );
                             }
                         }
                         if *pos >= tokens.len() || tokens[*pos] != Token::RBrace {
@@ -293,7 +346,7 @@ mod ast {
                 _ => panic!(
                     "Invalid statement at token: {:?} {:?}",
                     tokens[*pos],
-                    tokens[*pos-1]
+                    tokens[*pos - 1]
                 ),
             }
         }
@@ -347,6 +400,7 @@ mod ast {
         Str(String),
         Binary(Box<Expr>, Token, Box<Expr>),
         FieldAccess(Box<Expr>, String), // 新增的字段访问节点
+        StructInstance(String, Vec<(String, Expr)>), // 新增的实例化结构体节点
     }
 
     impl Expr {
@@ -377,6 +431,9 @@ mod ast {
         }
 
         fn parse_mul_div_mod(tokens: &[Token], pos: &mut usize) -> Expr {
+            if *pos == 95 {
+                println!("95");
+            }
             let mut node = Self::parse_primary(tokens, pos);
 
             while *pos < tokens.len() {
@@ -411,17 +468,37 @@ mod ast {
                 }
                 Token::Var(ref var_name) => {
                     *pos += 1;
-                    if *pos < tokens.len() && tokens[*pos] == Token::Dot {
+                    if *pos < tokens.len() && tokens[*pos] == Token::LBrace {
                         *pos += 1;
-                        if let Token::Var(ref field_name) = tokens[*pos] {
-                            *pos += 1;
-                            Expr::FieldAccess(
-                                Box::new(Expr::Var(var_name.clone())),
-                                field_name.clone(),
-                            )
-                        } else {
-                            panic!("Expected field name after '.'");
+                        let mut fields = Vec::new();
+                        while *pos < tokens.len() && tokens[*pos] != Token::RBrace {
+                            if Token::NewLine == tokens[*pos] {
+                                *pos += 1;
+                                continue;
+                            }
+                            if let Token::Var(ref field_name) = tokens[*pos] {
+                                *pos += 1;
+                                if *pos >= tokens.len() || tokens[*pos] != Token::Colon {
+                                    panic!("Expected ':' in struct instance");
+                                }
+                                *pos += 1;
+                                let expr = Expr::parse_expr(tokens, pos);
+                                fields.push((field_name.clone(), expr));
+                                if *pos < tokens.len() && tokens[*pos] == Token::Comma {
+                                    *pos += 1;
+                                }
+                            } else {
+                                panic!(
+                                    "Expected field name in struct instance, {:?}",
+                                    tokens[*pos]
+                                );
+                            }
                         }
+                        if *pos >= tokens.len() || tokens[*pos] != Token::RBrace {
+                            panic!("Expected '}}' in struct instance");
+                        }
+                        *pos += 1;
+                        Expr::StructInstance(var_name.clone(), fields)
                     } else {
                         Expr::Var(var_name.clone())
                     }
@@ -530,6 +607,26 @@ mod vm {
                     let field_names = fields.iter().map(|(f, _)| f.clone()).collect();
                     self.structs.insert(name.clone(), field_names);
                 }
+                Stmt::StructInstance(var_name, struct_name, fields) => {
+                    if let Some(field_names) = self.structs.get(struct_name).cloned() {
+                        let mut struct_values = HashMap::new();
+                        for (field_name, expr) in fields {
+                            if field_names.contains(field_name) {
+                                let value = self.evaluate_expr(expr);
+                                struct_values.insert(field_name.clone(), value);
+                            } else {
+                                panic!(
+                                    "Undefined field: {} for struct {}",
+                                    field_name, struct_name
+                                );
+                            }
+                        }
+                        self.variables
+                            .insert(var_name.clone(), Value::Struct(struct_values));
+                    } else {
+                        panic!("Unknown struct {}", struct_name);
+                    }
+                }
             }
         }
 
@@ -576,6 +673,14 @@ mod vm {
                     } else {
                         panic!("Field access on non-struct value");
                     }
+                }
+                Expr::StructInstance(_name, fields) => {
+                    let mut field_values = HashMap::new();
+                    for (field_name, expr) in fields {
+                        let value = self.evaluate_expr(expr);
+                        field_values.insert(field_name.clone(), value);
+                    }
+                    Value::Struct(field_values)
                 }
             }
         }
