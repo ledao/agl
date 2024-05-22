@@ -33,11 +33,11 @@ mod lexer {
         Return,
         Arrow,
     }
-    
+
     pub fn tokenize(input: &str) -> Vec<Token> {
         let mut tokens = Vec::new();
         let mut chars = input.chars().peekable();
-    
+
         while let Some(&ch) = chars.peek() {
             match ch {
                 '0'..='9' => {
@@ -463,7 +463,6 @@ mod ast {
         }
     }
 
-
     impl Expr {
         fn parse_expr(tokens: &[Token], pos: &mut usize) -> Expr {
             Self::parse_add_sub(tokens, pos)
@@ -691,7 +690,8 @@ mod vm {
                     }
                 }
                 Stmt::FnDef(name, params, body) => {
-                    self.global_variables.insert(name.clone(), Value::Fn(params.clone(), body.clone()));
+                    self.global_variables
+                        .insert(name.clone(), Value::Fn(params.clone(), body.clone()));
                 }
                 Stmt::Return(expr) => {
                     let value = self.evaluate_expr(expr);
@@ -747,7 +747,7 @@ mod vm {
                     }
                 }
                 Expr::FnCall(func_name, args) => {
-                     if let Value::Fn(params, body) = self.lookup_var(func_name) {
+                    if let Value::Fn(params, body) = self.lookup_var(func_name) {
                         if params.len() != args.len() {
                             panic!("Argument count mismatch in function call to {}", func_name);
                         }
@@ -757,7 +757,12 @@ mod vm {
                         }
                         self.local_variables.push(new_env);
                         self.run(&body);
-                        let ret_val = self.local_variables.pop().unwrap().remove("return").unwrap_or(Value::Number(0));
+                        let ret_val = self
+                            .local_variables
+                            .pop()
+                            .unwrap()
+                            .remove("return")
+                            .unwrap_or(Value::Number(0));
                         ret_val
                     } else {
                         panic!("Expected function in function call to {}", func_name)
@@ -772,7 +777,10 @@ mod vm {
                     return value.clone();
                 }
             }
-            self.global_variables.get(var_name).cloned().unwrap_or_else(||{panic!("Undefined variable '{}'", var_name)})
+            self.global_variables
+                .get(var_name)
+                .cloned()
+                .unwrap_or_else(|| panic!("Undefined variable '{}'", var_name))
         }
 
         fn evaluate_cond(&mut self, expr: &Expr) -> bool {
