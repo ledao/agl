@@ -13,15 +13,15 @@ mod lexer {
         RParen,
         LBrace,
         RBrace,
-        Colon, // 新增的冒号 Token
-        Comma, // 新增的逗号 Token
-        Dot,   // 新增的点 Token
+        Colon,
+        Comma,
+        Dot,
         Let,
         Print,
         Assign,
         If,
         Else,
-        Struct, // 新增的结构体 Token
+        Struct,
         Eq,
         Neq,
         Lt,
@@ -29,12 +29,15 @@ mod lexer {
         Le,
         Ge,
         NewLine,
+        Fn,
+        Return,
+        Arrow,
     }
-
+    
     pub fn tokenize(input: &str) -> Vec<Token> {
         let mut tokens = Vec::new();
         let mut chars = input.chars().peekable();
-
+    
         while let Some(&ch) = chars.peek() {
             match ch {
                 '0'..='9' => {
@@ -65,6 +68,8 @@ mod lexer {
                         "if" => Token::If,
                         "else" => Token::Else,
                         "struct" => Token::Struct,
+                        "fn" => Token::Fn,
+                        "return" => Token::Return,
                         _ => Token::Var(ident),
                     });
                 }
@@ -88,7 +93,12 @@ mod lexer {
                 }
                 '-' => {
                     chars.next();
-                    tokens.push(Token::Sub);
+                    if let Some(&'>') = chars.peek() {
+                        chars.next();
+                        tokens.push(Token::Arrow);
+                    } else {
+                        tokens.push(Token::Sub);
+                    }
                 }
                 '*' => {
                     chars.next();
@@ -193,13 +203,25 @@ mod lexer {
 mod ast {
     use crate::lexer::Token;
 
-    #[derive(Debug)]
+    #[derive(Debug, Clone)]
     pub enum Stmt {
         Let(String, Expr),
         Print(Expr),
         If(Expr, Vec<Stmt>, Option<Vec<Stmt>>),
         StructDef(String, Vec<(String, String)>),
         StructInstance(String, String, Vec<(String, Expr)>),
+        FnDef(String, Vec<String>, Vec<Stmt>),
+        Return(Expr),
+    }
+
+    #[derive(Debug, Clone)]
+    pub enum Expr {
+        Number(i32),
+        Var(String),
+        Str(String),
+        BinOp(Box<Expr>, BinOp, Box<Expr>),
+        StructField(Box<Expr>, String),
+        FnCall(String, Vec<Expr>),
     }
 
     impl Stmt {
@@ -341,7 +363,61 @@ mod ast {
                         panic!("Expected struct name in struct definition");
                     }
                 }
-                _ => panic!("Unexpected token in statement: {:?}", tokens[*pos]),
+                Token::Fn => {
+                    *pos += 1;
+                    if let Token::Var(ref func_name) = tokens[*pos] {
+                        *pos += 1;
+                        if *pos >= tokens.len() || tokens[*pos] != Token::LParen {
+                            panic!("Expected '(' in function definition");
+                        }
+                        *pos += 1;
+                        let mut params = Vec::new();
+                        while *pos < tokens.len() && tokens[*pos] != Token::RParen {
+                            if Token::NewLine == tokens[*pos] {
+                                *pos += 1;
+                                continue;
+                            }
+                            if let Token::Var(ref param_name) = tokens[*pos] {
+                                params.push(param_name.clone());
+                                *pos += 1;
+                                if *pos < tokens.len() && tokens[*pos] == Token::Comma {
+                                    *pos += 1;
+                                }
+                            } else {
+                                panic!("Expected parameter name in function definition");
+                            }
+                        }
+                        if *pos >= tokens.len() || tokens[*pos] != Token::RParen {
+                            panic!("Expected ')' in function definition");
+                        }
+                        *pos += 1;
+                        if *pos >= tokens.len() || tokens[*pos] != Token::LBrace {
+                            panic!("Expected '{{' in function definition");
+                        }
+                        *pos += 1;
+                        let mut body = Vec::new();
+                        while *pos < tokens.len() && tokens[*pos] != Token::RBrace {
+                            if Token::NewLine == tokens[*pos] {
+                                *pos += 1;
+                                continue;
+                            }
+                            body.push(Self::parse_stmt(tokens, pos));
+                        }
+                        if *pos >= tokens.len() || tokens[*pos] != Token::RBrace {
+                            panic!("Expected '}}' in function definition");
+                        }
+                        *pos += 1;
+                        return Stmt::FnDef(func_name.clone(), params, body);
+                    } else {
+                        panic!("Expected function name in function definition");
+                    }
+                }
+                Token::Return => {
+                    *pos += 1;
+                    let expr = Expr::parse_expr(tokens, pos);
+                    Stmt::Return(expr)
+                }
+                _ => panic!("Unexpected token: {:?}", tokens[*pos]),
             }
         }
 
@@ -387,14 +463,6 @@ mod ast {
         }
     }
 
-    #[derive(Debug)]
-    pub enum Expr {
-        Number(i32),
-        Var(String),
-        Str(String),
-        BinOp(Box<Expr>, BinOp, Box<Expr>),
-        StructField(Box<Expr>, String), // 结构体字段
-    }
 
     impl Expr {
         fn parse_expr(tokens: &[Token], pos: &mut usize) -> Expr {
@@ -450,14 +518,28 @@ mod ast {
             if *pos >= tokens.len() {
                 panic!("Unexpected end of tokens in expression");
             }
-            match &tokens[*pos] {
+            match tokens[*pos] {
                 Token::Number(n) => {
                     *pos += 1;
-                    Expr::Number(*n)
+                    Expr::Number(n)
                 }
-                Token::Var(var_name) => {
+                Token::Var(ref var_name) => {
                     *pos += 1;
-                    if *pos < tokens.len() && tokens[*pos] == Token::Dot {
+                    if *pos < tokens.len() && tokens[*pos] == Token::LParen {
+                        *pos += 1;
+                        let mut args = Vec::new();
+                        while *pos < tokens.len() && tokens[*pos] != Token::RParen {
+                            args.push(Self::parse_expr(tokens, pos));
+                            if *pos < tokens.len() && tokens[*pos] == Token::Comma {
+                                *pos += 1;
+                            }
+                        }
+                        if *pos >= tokens.len() || tokens[*pos] != Token::RParen {
+                            panic!("Expected ')' after function arguments");
+                        }
+                        *pos += 1;
+                        return Expr::FnCall(var_name.clone(), args);
+                    } else if *pos < tokens.len() && tokens[*pos] == Token::Dot {
                         *pos += 1;
                         if let Token::Var(field_name) = &tokens[*pos] {
                             *pos += 1;
@@ -471,7 +553,7 @@ mod ast {
                     }
                     Expr::Var(var_name.clone())
                 }
-                Token::Str(s) => {
+                Token::Str(ref s) => {
                     *pos += 1;
                     Expr::Str(s.clone())
                 }
@@ -509,7 +591,7 @@ mod ast {
         }
     }
 
-    #[derive(Debug)]
+    #[derive(Debug, Clone)]
     pub enum BinOp {
         Add,
         Sub,
@@ -530,8 +612,9 @@ mod vm {
     use std::collections::HashMap;
 
     pub struct VM {
-        variables: HashMap<String, Value>,
+        global_variables: HashMap<String, Value>,
         structs: HashMap<String, StructDef>,
+        local_variables: Vec<HashMap<String, Value>>,
     }
 
     #[derive(Debug, Clone)]
@@ -539,6 +622,7 @@ mod vm {
         Number(i32),
         Str(String),
         StructInstance(HashMap<String, Value>),
+        Fn(Vec<String>, Vec<Stmt>),
     }
 
     #[derive(Debug, Clone)]
@@ -549,8 +633,9 @@ mod vm {
     impl VM {
         pub fn new() -> Self {
             VM {
-                variables: HashMap::new(),
+                global_variables: HashMap::new(),
                 structs: HashMap::new(),
+                local_variables: vec![HashMap::new()],
             }
         }
 
@@ -564,7 +649,7 @@ mod vm {
             match stmt {
                 Stmt::Let(var_name, expr) => {
                     let value = self.evaluate_expr(expr);
-                    self.variables.insert(var_name.clone(), value);
+                    self.current_env().insert(var_name.clone(), value);
                 }
                 Stmt::Print(expr) => {
                     let value = self.evaluate_expr(expr);
@@ -586,7 +671,7 @@ mod vm {
                         .insert(name.clone(), StructDef { fields: field_map });
                 }
                 Stmt::StructInstance(var_name, struct_name, fields) => {
-                    if let Some(struct_def) = self.structs.get(struct_name) {
+                    if let Some(struct_def) = self.structs.get(struct_name).cloned() {
                         let mut instance = HashMap::new();
                         for (field_name, expr) in fields {
                             let value = self.evaluate_expr(expr);
@@ -599,25 +684,26 @@ mod vm {
                                 );
                             }
                         }
-                        self.variables
+                        self.current_env()
                             .insert(var_name.clone(), Value::StructInstance(instance));
                     } else {
                         panic!("Struct '{}' not defined", struct_name);
                     }
                 }
+                Stmt::FnDef(name, params, body) => {
+                    self.global_variables.insert(name.clone(), Value::Fn(params.clone(), body.clone()));
+                }
+                Stmt::Return(expr) => {
+                    let value = self.evaluate_expr(expr);
+                    self.current_env().insert("return".to_string(), value);
+                }
             }
         }
 
-        fn evaluate_expr(&self, expr: &Expr) -> Value {
+        fn evaluate_expr(&mut self, expr: &Expr) -> Value {
             match expr {
                 Expr::Number(n) => Value::Number(*n),
-                Expr::Var(var_name) => {
-                    if let Some(value) = self.variables.get(var_name) {
-                        value.clone()
-                    } else {
-                        panic!("Variable '{}' not found", var_name);
-                    }
-                }
+                Expr::Var(var_name) => self.lookup_var(var_name),
                 Expr::Str(s) => Value::Str(s.clone()),
                 Expr::BinOp(lhs, op, rhs) => {
                     let lhs_val = self.evaluate_expr(lhs);
@@ -660,14 +746,43 @@ mod vm {
                         panic!("Expected struct instance in field access");
                     }
                 }
+                Expr::FnCall(func_name, args) => {
+                     if let Value::Fn(params, body) = self.lookup_var(func_name) {
+                        if params.len() != args.len() {
+                            panic!("Argument count mismatch in function call to {}", func_name);
+                        }
+                        let mut new_env = HashMap::new();
+                        for (param, arg) in params.iter().zip(args.iter()) {
+                            new_env.insert(param.clone(), self.evaluate_expr(arg));
+                        }
+                        self.local_variables.push(new_env);
+                        self.run(&body);
+                        let ret_val = self.local_variables.pop().unwrap().remove("return").unwrap_or(Value::Number(0));
+                        ret_val
+                    } else {
+                        panic!("Expected function in function call to {}", func_name)
+                    }
+                }
             }
         }
 
-        fn evaluate_cond(&self, expr: &Expr) -> bool {
+        fn lookup_var(&self, var_name: &str) -> Value {
+            for env in self.local_variables.iter().rev() {
+                if let Some(value) = env.get(var_name) {
+                    return value.clone();
+                }
+            }
+            self.global_variables.get(var_name).cloned().unwrap_or_else(||{panic!("Undefined variable '{}'", var_name)})
+        }
+
+        fn evaluate_cond(&mut self, expr: &Expr) -> bool {
             match self.evaluate_expr(expr) {
                 Value::Number(n) => n != 0,
                 _ => panic!("Expected numeric value in condition"),
             }
+        }
+        fn current_env(&mut self) -> &mut HashMap<String, Value> {
+            self.local_variables.last_mut().unwrap()
         }
     }
 }

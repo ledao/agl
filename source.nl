@@ -44,3 +44,19 @@ if p.x > p.y {
 } else {
     print "p.x < p.y"
 }
+
+fn add(a, b) {
+    print "i am in a function"
+    return a + b
+}
+
+fn sub(a, b) {
+    print "i am in sub function"
+    return a - b
+}
+
+let result = add(5, 3)
+print(result)
+
+let result2 = sub(2, 4)
+print result2
