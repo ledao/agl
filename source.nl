@@ -11,6 +11,7 @@ print f
 let g = (a+(b+a))*a
 print g
 
+# if expression demo
 if a > b {
     let c = 10
     print c
@@ -28,6 +29,7 @@ if 4 > 5 {
     print "else"
 }
 
+# define struct
 struct Point {
     x: i32,
     y: i32

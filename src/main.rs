@@ -190,6 +190,21 @@ mod lexer {
                         tokens.push(Token::Gt);
                     }
                 }
+                '#' => {
+                    chars.next();
+                    while let Some(&ch) = chars.peek() {
+                        if ch == '\n' {
+                            chars.next();
+                            break;
+                        } else if ch == '\r' {
+                            chars.next();
+                            chars.next();
+                            break;
+                        } else {
+                            chars.next();
+                        }
+                    }
+                }
                 _ => {
                     panic!("Unexpected character: {}", ch);
                 }
