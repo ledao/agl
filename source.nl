@@ -31,8 +31,8 @@ if 4 > 5 {
 
 # define struct
 struct Point {
-    x: i32,
-    y: i32
+    x: int
+    y: int
 }
 
 let p = Point { x: 20, y: 20 }
@@ -47,12 +47,12 @@ if p.x > p.y {
     print "p.x < p.y"
 }
 
-fn add(a, b) {
+fn add(a: int, b: int): int {
     print "i am in a function"
     return a + b
 }
 
-fn sub(a, b) {
+fn sub(a: int, b: int): int {
     print "i am in sub function"
     return a - b
 }
@@ -62,3 +62,6 @@ print(result)
 
 let result2 = sub(2, 4)
 print result2
+
+let bool_v = true
+print bool_v

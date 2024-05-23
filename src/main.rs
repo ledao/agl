@@ -1,7 +1,11 @@
 mod lexer {
+    use core::panic;
+
     #[derive(Debug, PartialEq, Clone)]
     pub enum Token {
-        Number(i32),
+        Int64(i64),
+        Bool(bool),
+        Float(f64),
         Var(String),
         Str(String),
         Add,
@@ -32,6 +36,7 @@ mod lexer {
         Fn,
         Return,
         Arrow,
+        Type(String),
     }
 
     pub fn tokenize(input: &str) -> Vec<Token> {
@@ -42,20 +47,31 @@ mod lexer {
             match ch {
                 '0'..='9' => {
                     let mut number = String::new();
+                    let mut has_dot = false;
                     while let Some(&ch) = chars.peek() {
                         if ch.is_numeric() {
                             number.push(ch);
                             chars.next();
+                        } else if ch == '.' {
+                            number.push(ch);
+                            if has_dot {
+                                panic!("Invalid number, 2 dots");
+                            }
+                            has_dot = true;
                         } else {
                             break;
                         }
                     }
-                    tokens.push(Token::Number(number.parse().unwrap()));
+                    if has_dot {
+                        tokens.push(Token::Float(number.parse().unwrap()));
+                    } else {
+                        tokens.push(Token::Int64(number.parse().unwrap()));
+                    }
                 }
                 'a'..='z' | 'A'..='Z' => {
                     let mut ident = String::new();
                     while let Some(&ch) = chars.peek() {
-                        if ch.is_alphanumeric() {
+                        if ch.is_alphanumeric() || ch == '_' {
                             ident.push(ch);
                             chars.next();
                         } else {
@@ -70,6 +86,12 @@ mod lexer {
                         "struct" => Token::Struct,
                         "fn" => Token::Fn,
                         "return" => Token::Return,
+                        "int" => Token::Type("int".to_string()),
+                        "float" => Token::Type("float".to_string()),
+                        "bool" => Token::Type("bool".to_string()),
+                        "string" => Token::Type("string".to_string()),
+                        "true" => Token::Bool(true),
+                        "false" => Token::Bool(false),
                         _ => Token::Var(ident),
                     });
                 }
@@ -219,19 +241,30 @@ mod ast {
     use crate::lexer::Token;
 
     #[derive(Debug, Clone)]
+    pub enum ValueType {
+        Void,
+        Int,
+        Float,
+        String,
+        Bool,
+    }
+
+    #[derive(Debug, Clone)]
     pub enum Stmt {
-        Let(String, Expr),
+        Let(String, ValueType, Expr),
         Print(Expr),
         If(Expr, Vec<Stmt>, Option<Vec<Stmt>>),
-        StructDef(String, Vec<(String, String)>),
+        StructDef(String, Vec<(String, ValueType)>),
         StructInstance(String, String, Vec<(String, Expr)>),
-        FnDef(String, Vec<String>, Vec<Stmt>),
+        FnDef(String, Vec<(String, ValueType)>, Vec<Stmt>, ValueType),
         Return(Expr),
     }
 
     #[derive(Debug, Clone)]
     pub enum Expr {
-        Number(i32),
+        Int64(i64),
+        Float(f64),
+        Bool(bool),
         Var(String),
         Str(String),
         BinOp(Box<Expr>, BinOp, Box<Expr>),
@@ -263,8 +296,27 @@ mod ast {
                     if *pos >= tokens.len() {
                         panic!("Unexpected end of tokens in let statement");
                     }
+                    let mut var_type = ValueType::Void;
                     if let Token::Var(ref var_name) = tokens[*pos] {
                         *pos += 1;
+                        if Token::Colon == tokens[*pos] {
+                            *pos += 1;
+                            if *pos >= tokens.len() {
+                                panic!("Expected type name in let statement");
+                            }
+                            if let Token::Type(ref type_name) = tokens[*pos] {
+                                var_type = match type_name.as_str() {
+                                    "int" => ValueType::Int,
+                                    "float" => ValueType::Float,
+                                    "string" => ValueType::String,
+                                    "bool" => ValueType::Bool,
+                                    _ => panic!("Unknown type name: {}", type_name),
+                                };
+                            } else {
+                                panic!("Expected type name in let statement")
+                            }
+                            *pos += 1;
+                        }
                         if *pos >= tokens.len() || tokens[*pos] != Token::Assign {
                             panic!("Expected '=' in let statement");
                         }
@@ -313,7 +365,39 @@ mod ast {
                                 }
                                 _ => {
                                     let expr = Expr::parse_expr(tokens, pos);
-                                    return Stmt::Let(var_name.clone(), expr);
+                                    match var_type {
+                                        ValueType::Void => {
+                                            return Stmt::Let(var_name.clone(), var_type, expr);
+                                        }
+                                        ValueType::Bool => {
+                                            if let Expr::Bool(_) = expr {
+                                                return Stmt::Let(var_name.clone(), var_type, expr);
+                                            } else {
+                                                panic!("Expected bool value in let statement")
+                                            }
+                                        }
+                                        ValueType::Int => {
+                                            if let Expr::Int64(_) = expr {
+                                                return Stmt::Let(var_name.clone(), var_type, expr);
+                                            } else {
+                                                panic!("Expected int value in let statement")
+                                            }
+                                        }
+                                        ValueType::Float => {
+                                            if let Expr::Float(_) = expr {
+                                                return Stmt::Let(var_name.clone(), var_type, expr);
+                                            } else {
+                                                panic!("Expected float value in let statement")
+                                            }
+                                        }
+                                        ValueType::String => {
+                                            if let Expr::Str(_) = expr {
+                                                return Stmt::Let(var_name.clone(), var_type, expr);
+                                            } else {
+                                                panic!("Expected string value in let statement")
+                                            }
+                                        }
+                                    };
                                 }
                             }
                         }
@@ -356,14 +440,24 @@ mod ast {
                                 if *pos >= tokens.len() {
                                     panic!("Unexpected end of tokens in struct definition");
                                 }
-                                if let Token::Var(ref field_type) = tokens[*pos] {
+                                if let Token::Type(ref field_type) = tokens[*pos] {
                                     *pos += 1;
-                                    fields.push((field_name.clone(), field_type.clone()));
-                                    if *pos < tokens.len() && tokens[*pos] == Token::Comma {
-                                        *pos += 1;
-                                    }
+                                    let final_type = match field_type.as_str() {
+                                        "int" => ValueType::Int,
+                                        "float" => ValueType::Float,
+                                        "bool" => ValueType::Bool,
+                                        "string" => ValueType::String,
+                                        _ => panic!(
+                                            "Unknown type in struct definition: {}",
+                                            field_type
+                                        ),
+                                    };
+                                    fields.push((field_name.clone(), final_type));
                                 } else {
-                                    panic!("Expected type name in struct definition");
+                                    panic!(
+                                        "Expected type name in struct definition, {:?}",
+                                        tokens[*pos]
+                                    );
                                 }
                             } else {
                                 panic!("Expected field name in struct definition");
@@ -392,19 +486,61 @@ mod ast {
                                 *pos += 1;
                                 continue;
                             }
-                            if let Token::Var(ref param_name) = tokens[*pos] {
-                                params.push(param_name.clone());
-                                *pos += 1;
-                                if *pos < tokens.len() && tokens[*pos] == Token::Comma {
-                                    *pos += 1;
-                                }
+                            let param_name = if let Token::Var(ref param_name) = tokens[*pos] {
+                                param_name
                             } else {
-                                panic!("Expected parameter name in function definition");
+                                panic!(
+                                    "Expected parameter name in function definition, {:?}",
+                                    tokens[*pos]
+                                );
+                            };
+                            *pos += 1;
+
+                            let mut value_type = ValueType::Void;
+                            if tokens[*pos] == Token::Colon {
+                                *pos += 1;
+                                value_type = if let Token::Type(ref param_type) = tokens[*pos] {
+                                    *pos += 1;
+                                    match param_type.as_str() {
+                                        "int" => ValueType::Int,
+                                        "float" => ValueType::Float,
+                                        "bool" => ValueType::Bool,
+                                        "string" => ValueType::String,
+                                        _ => panic!(
+                                            "Unknown type in function definition: {}",
+                                            param_type
+                                        ),
+                                    }
+                                } else {
+                                    panic!("Expected type name in function definition")
+                                }
+                            };
+
+                            if *pos < tokens.len() && tokens[*pos] == Token::Comma {
+                                *pos += 1;
                             }
+                            params.push((param_name.clone(), value_type));
                         }
                         if *pos >= tokens.len() || tokens[*pos] != Token::RParen {
                             panic!("Expected ')' in function definition");
                         }
+                        *pos += 1;
+                        let mut return_type = ValueType::Void;
+                        if tokens[*pos] == Token::Colon {
+                            *pos += 1;
+                            if let Token::Type(ref rtype) = tokens[*pos] {
+                                return_type = match rtype.as_str() {
+                                    "int" => ValueType::Int,
+                                    "float" => ValueType::Float,
+                                    "bool" => ValueType::Bool,
+                                    "string" => ValueType::String,
+                                    _ => panic!("Unknown type in function definition: {}", rtype),
+                                };
+                            } else {
+                                panic!("Expected type name in function definition")
+                            }
+                        }
+
                         *pos += 1;
                         if *pos >= tokens.len() || tokens[*pos] != Token::LBrace {
                             panic!("Expected '{{' in function definition");
@@ -422,7 +558,7 @@ mod ast {
                             panic!("Expected '}}' in function definition");
                         }
                         *pos += 1;
-                        return Stmt::FnDef(func_name.clone(), params, body);
+                        return Stmt::FnDef(func_name.clone(), params, body, return_type);
                     } else {
                         panic!("Expected function name in function definition");
                     }
@@ -533,9 +669,17 @@ mod ast {
                 panic!("Unexpected end of tokens in expression");
             }
             match tokens[*pos] {
-                Token::Number(n) => {
+                Token::Int64(n) => {
                     *pos += 1;
-                    Expr::Number(n)
+                    Expr::Int64(n)
+                }
+                Token::Bool(b) => {
+                    *pos += 1;
+                    Expr::Bool(b)
+                }
+                Token::Float(f) => {
+                    *pos += 1;
+                    Expr::Float(f)
                 }
                 Token::Var(ref var_name) => {
                     *pos += 1;
@@ -622,7 +766,7 @@ mod ast {
 }
 
 mod vm {
-    use crate::ast::{BinOp, Expr, Stmt};
+    use crate::ast::{BinOp, Expr, Stmt, ValueType};
     use std::collections::HashMap;
 
     pub struct VM {
@@ -633,15 +777,17 @@ mod vm {
 
     #[derive(Debug, Clone)]
     pub enum Value {
-        Number(i32),
+        Int64(i64),
+        Float(f64),
+        Bool(bool),
         Str(String),
         StructInstance(HashMap<String, Value>),
-        Fn(Vec<String>, Vec<Stmt>),
+        Fn(Vec<(String, ValueType)>, Vec<Stmt>),
     }
 
     #[derive(Debug, Clone)]
     pub struct StructDef {
-        fields: HashMap<String, String>,
+        fields: HashMap<String, ValueType>,
     }
 
     impl VM {
@@ -661,7 +807,7 @@ mod vm {
 
         fn execute_stmt(&mut self, stmt: &Stmt) {
             match stmt {
-                Stmt::Let(var_name, expr) => {
+                Stmt::Let(var_name, _var_type, expr) => {
                     let value = self.evaluate_expr(expr);
                     self.current_env().insert(var_name.clone(), value);
                 }
@@ -704,7 +850,7 @@ mod vm {
                         panic!("Struct '{}' not defined", struct_name);
                     }
                 }
-                Stmt::FnDef(name, params, body) => {
+                Stmt::FnDef(name, params, body, _return_type) => {
                     self.global_variables
                         .insert(name.clone(), Value::Fn(params.clone(), body.clone()));
                 }
@@ -717,36 +863,26 @@ mod vm {
 
         fn evaluate_expr(&mut self, expr: &Expr) -> Value {
             match expr {
-                Expr::Number(n) => Value::Number(*n),
+                Expr::Int64(n) => Value::Int64(*n),
+                Expr::Float(f) => Value::Float(*f),
+                Expr::Bool(b) => Value::Bool(*b),
                 Expr::Var(var_name) => self.lookup_var(var_name),
                 Expr::Str(s) => Value::Str(s.clone()),
                 Expr::BinOp(lhs, op, rhs) => {
                     let lhs_val = self.evaluate_expr(lhs);
                     let rhs_val = self.evaluate_expr(rhs);
                     match (lhs_val, rhs_val, op) {
-                        (Value::Number(l), Value::Number(r), BinOp::Add) => Value::Number(l + r),
-                        (Value::Number(l), Value::Number(r), BinOp::Sub) => Value::Number(l - r),
-                        (Value::Number(l), Value::Number(r), BinOp::Mul) => Value::Number(l * r),
-                        (Value::Number(l), Value::Number(r), BinOp::Div) => Value::Number(l / r),
-                        (Value::Number(l), Value::Number(r), BinOp::Mod) => Value::Number(l % r),
-                        (Value::Number(l), Value::Number(r), BinOp::Eq) => {
-                            Value::Number((l == r) as i32)
-                        }
-                        (Value::Number(l), Value::Number(r), BinOp::Neq) => {
-                            Value::Number((l != r) as i32)
-                        }
-                        (Value::Number(l), Value::Number(r), BinOp::Lt) => {
-                            Value::Number((l < r) as i32)
-                        }
-                        (Value::Number(l), Value::Number(r), BinOp::Gt) => {
-                            Value::Number((l > r) as i32)
-                        }
-                        (Value::Number(l), Value::Number(r), BinOp::Le) => {
-                            Value::Number((l <= r) as i32)
-                        }
-                        (Value::Number(l), Value::Number(r), BinOp::Ge) => {
-                            Value::Number((l >= r) as i32)
-                        }
+                        (Value::Int64(l), Value::Int64(r), BinOp::Add) => Value::Int64(l + r),
+                        (Value::Int64(l), Value::Int64(r), BinOp::Sub) => Value::Int64(l - r),
+                        (Value::Int64(l), Value::Int64(r), BinOp::Mul) => Value::Int64(l * r),
+                        (Value::Int64(l), Value::Int64(r), BinOp::Div) => Value::Int64(l / r),
+                        (Value::Int64(l), Value::Int64(r), BinOp::Mod) => Value::Int64(l % r),
+                        (Value::Int64(l), Value::Int64(r), BinOp::Eq) => Value::Bool(l == r),
+                        (Value::Int64(l), Value::Int64(r), BinOp::Neq) => Value::Bool(l != r),
+                        (Value::Int64(l), Value::Int64(r), BinOp::Lt) => Value::Bool(l < r),
+                        (Value::Int64(l), Value::Int64(r), BinOp::Gt) => Value::Bool(l > r),
+                        (Value::Int64(l), Value::Int64(r), BinOp::Le) => Value::Bool(l <= r),
+                        (Value::Int64(l), Value::Int64(r), BinOp::Ge) => Value::Bool(l >= r),
                         _ => panic!("Invalid binary operation"),
                     }
                 }
@@ -768,7 +904,7 @@ mod vm {
                         }
                         let mut new_env = HashMap::new();
                         for (param, arg) in params.iter().zip(args.iter()) {
-                            new_env.insert(param.clone(), self.evaluate_expr(arg));
+                            new_env.insert(param.0.clone(), self.evaluate_expr(arg));
                         }
                         self.local_variables.push(new_env);
                         self.run(&body);
@@ -777,7 +913,7 @@ mod vm {
                             .pop()
                             .unwrap()
                             .remove("return")
-                            .unwrap_or(Value::Number(0));
+                            .unwrap_or(Value::Int64(0));
                         ret_val
                     } else {
                         panic!("Expected function in function call to {}", func_name)
@@ -800,8 +936,8 @@ mod vm {
 
         fn evaluate_cond(&mut self, expr: &Expr) -> bool {
             match self.evaluate_expr(expr) {
-                Value::Number(n) => n != 0,
-                _ => panic!("Expected numeric value in condition"),
+                Value::Bool(b) => b,
+                _ => panic!("Expected numeric value in condition, {:?}", expr),
             }
         }
         fn current_env(&mut self) -> &mut HashMap<String, Value> {
