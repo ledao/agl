@@ -268,7 +268,7 @@ mod ast {
         Var(String),
         Str(String),
         BinOp(Box<Expr>, BinOp, Box<Expr>),
-        StructField(Box<Expr>, String),
+        StructField(Box<Expr>, String, String),
         FnCall(String, Vec<Expr>),
     }
 
@@ -704,6 +704,7 @@ mod ast {
                             return Expr::StructField(
                                 Box::new(Expr::Var(var_name.clone())),
                                 field_name.clone(),
+                                "".to_string(),
                             );
                         } else {
                             panic!("Expected field name after '.' in struct field access");
@@ -767,7 +768,10 @@ mod ast {
 
 mod vm {
     use crate::ast::{BinOp, Expr, Stmt, ValueType};
-    use std::collections::HashMap;
+    use std::{
+        collections::HashMap,
+        fmt::{Display, Formatter},
+    };
 
     pub struct VM {
         global_variables: HashMap<String, Value>,
@@ -781,8 +785,28 @@ mod vm {
         Float(f64),
         Bool(bool),
         Str(String),
-        StructInstance(HashMap<String, Value>),
+        StructInstance(HashMap<String, Value>, String, String),
         Fn(Vec<(String, ValueType)>, Vec<Stmt>),
+    }
+
+    impl Display for Value {
+        fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+            match self {
+                Self::Int64(n) => write!(f, "{}", n),
+                Self::Float(n) => write!(f, "{}", n),
+                Self::Bool(b) => write!(f, "{}", b),
+                Self::Str(s) => write!(f, "\"{}\"", s),
+                Self::StructInstance(fields, var_name, struct_name) => {
+                    write!(f, "{} {} {{", struct_name, var_name)?;
+                    for (field_name, field_value) in fields {
+                        write!(f, " {}:{} ", field_name, field_value)?;
+                    }
+                    write!(f, "}}")?;
+                    Ok(())
+                }
+                Self::Fn(_params, _stmts) => write!(f, "<fn>"),
+            }
+        }
     }
 
     #[derive(Debug, Clone)]
@@ -813,7 +837,7 @@ mod vm {
                 }
                 Stmt::Print(expr) => {
                     let value = self.evaluate_expr(expr);
-                    println!("{:?}", value);
+                    println!("{}", value);
                 }
                 Stmt::If(cond, true_branch, false_branch) => {
                     if self.evaluate_cond(cond) {
@@ -844,8 +868,10 @@ mod vm {
                                 );
                             }
                         }
-                        self.current_env()
-                            .insert(var_name.clone(), Value::StructInstance(instance));
+                        self.current_env().insert(
+                            var_name.clone(),
+                            Value::StructInstance(instance, var_name.clone(), struct_name.clone()),
+                        );
                     } else {
                         panic!("Struct '{}' not defined", struct_name);
                     }
@@ -886,8 +912,10 @@ mod vm {
                         _ => panic!("Invalid binary operation"),
                     }
                 }
-                Expr::StructField(expr, field_name) => {
-                    if let Value::StructInstance(instance) = self.evaluate_expr(expr) {
+                Expr::StructField(expr, field_name, _struct_name) => {
+                    if let Value::StructInstance(instance, _var_name, _struct_name) =
+                        self.evaluate_expr(expr)
+                    {
                         if let Some(value) = instance.get(field_name) {
                             value.clone()
                         } else {
@@ -951,7 +979,7 @@ use std::io::Read;
 
 fn main() {
     let mut source = String::new();
-    let mut source_file = File::open("source.nl").unwrap();
+    let mut source_file = File::open("source.agl").unwrap();
     _ = source_file.read_to_string(&mut source);
 
     let tokens = lexer::tokenize(&mut source);
