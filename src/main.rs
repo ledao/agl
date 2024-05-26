@@ -408,7 +408,15 @@ mod ast {
                 }
                 Token::Print => {
                     *pos += 1;
+                    if *pos >= tokens.len() || tokens[*pos] != Token::LParen {
+                        panic!("Expected '(' in print statement");
+                    }
+                    *pos += 1;
                     let expr = Expr::parse_expr(tokens, pos);
+                    if *pos >= tokens.len() || tokens[*pos] != Token::RParen {
+                        panic!("Expected ')' in print statement");
+                    }
+                    *pos += 1;
                     Stmt::Print(expr)
                 }
                 Token::If => {
