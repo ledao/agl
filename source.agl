@@ -1,32 +1,32 @@
 let a = 4
 let b = 5
 let c = ( a + b ) * a + b
-print(c)
+println(c)
 let d = a - b
-print(d)
+println(d)
 let e = a + ( b + a ) * a
-print(e)
+println(e)
 let f = ( a + ( b + a ) ) * a
-print(f)
+println(f)
 let g = (a+(b+a))*a
-print(g)
+println(g)
 
 # if expression demo
 if a > b {
     let c = 10
-    print(c)
-    print(a)
+    println(c)
+    println(a)
 } else {
-    print(b)
+    println(b)
 }
 if 5 > 4 {
-    print("5 > 4")
+    println("5 > 4")
 }
 
 if 4 > 5 {
-    print("4 > 5")
+    println("4 > 5")
 } else  {
-    print("else")
+    println("else")
 }
 
 # define struct
@@ -36,33 +36,33 @@ struct Point {
 }
 
 let p = Point { x: 20, y: 20 }
-print(p)
-print(p.x)
-print(p.y)
+println(p)
+println(p.x)
+println(p.y)
 
 if p.x > p.y {
-    print("p.x > p.y")
+    println("p.x > p.y")
 } else if p.x == p.y {
-    print("p.x == p.y")
+    println("p.x == p.y")
 } else {
-    print("p.x < p.y")
+    println("p.x < p.y")
 }
 
 fn add(a: int, b: int): int {
-    print("i am in a function")
+    println("i am in a function")
     return a + b
 }
 
 fn sub(a: int, b: int): int {
-    print("i am in sub function")
+    println("i am in sub function")
     return a - b
 }
 
 let result = add(5, 3)
-print(result)
+println(result)
 
 let result2 = sub(2, 4)
-print(result2)
+println(result2)
 
 let bool_v = true
-print(bool_v)
+println(bool_v)

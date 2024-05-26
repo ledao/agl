@@ -22,6 +22,7 @@ mod lexer {
         Dot,
         Let,
         Print,
+        Println,
         Assign,
         If,
         Else,
@@ -81,6 +82,7 @@ mod lexer {
                     tokens.push(match ident.as_str() {
                         "let" => Token::Let,
                         "print" => Token::Print,
+                        "println" => Token::Println,
                         "if" => Token::If,
                         "else" => Token::Else,
                         "struct" => Token::Struct,
@@ -253,6 +255,7 @@ mod ast {
     pub enum Stmt {
         Let(String, ValueType, Expr),
         Print(Expr),
+        Println(Expr),
         If(Expr, Vec<Stmt>, Option<Vec<Stmt>>),
         StructDef(String, Vec<(String, ValueType)>),
         StructInstance(String, String, Vec<(String, Expr)>),
@@ -419,6 +422,20 @@ mod ast {
                     *pos += 1;
                     Stmt::Print(expr)
                 }
+                Token::Println => {
+                    *pos += 1;
+                    if *pos >= tokens.len() || tokens[*pos] != Token::LParen {
+                        panic!("Expected '(' in print statement");
+                    }
+                    *pos += 1;
+                    let expr = Expr::parse_expr(tokens, pos);
+                    if *pos >= tokens.len() || tokens[*pos] != Token::RParen {
+                        panic!("Expected ')' in print statement");
+                    }
+                    *pos += 1;
+                    Stmt::Println(expr)
+                }
+
                 Token::If => {
                     *pos += 1;
                     let expr = Expr::parse_comparison_op(tokens, pos);
@@ -844,6 +861,10 @@ mod vm {
                     self.current_env().insert(var_name.clone(), value);
                 }
                 Stmt::Print(expr) => {
+                    let value = self.evaluate_expr(expr);
+                    print!("{}", value);
+                }
+                Stmt::Println(expr) => {
                     let value = self.evaluate_expr(expr);
                     println!("{}", value);
                 }
