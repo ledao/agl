@@ -38,6 +38,7 @@ mod lexer {
         Return,
         Arrow,
         Type(String),
+        Assert,
     }
 
     pub fn tokenize(input: &str) -> Vec<Token> {
@@ -94,6 +95,7 @@ mod lexer {
                         "string" => Token::Type("string".to_string()),
                         "true" => Token::Bool(true),
                         "false" => Token::Bool(false),
+                        "assert" => Token::Assert,
                         _ => Token::Var(ident),
                     });
                 }
@@ -256,6 +258,7 @@ mod ast {
         Let(String, ValueType, Expr),
         Print(Expr),
         Println(Expr),
+        Assert(Expr, String),
         If(Expr, Vec<Stmt>, Option<Vec<Stmt>>),
         StructDef(String, Vec<(String, ValueType)>),
         StructInstance(String, String, Vec<(String, Expr)>),
@@ -435,7 +438,16 @@ mod ast {
                     *pos += 1;
                     Stmt::Println(expr)
                 }
-
+                Token::Assert => {
+                    *pos += 1;
+                    if *pos >= tokens.len() || tokens[*pos] != Token::LParen {
+                        panic!("Expected '(' in print statement");
+                    }
+                    *pos += 1;
+                    let expr = Expr::parse_comparison_op(tokens, pos);
+                    
+                    Stmt::Assert(exprs)
+                }
                 Token::If => {
                     *pos += 1;
                     let expr = Expr::parse_comparison_op(tokens, pos);
@@ -812,6 +824,18 @@ mod vm {
         Str(String),
         StructInstance(HashMap<String, Value>, String, String),
         Fn(Vec<(String, ValueType)>, Vec<Stmt>),
+    }
+
+    impl Value {
+        fn equals(&self, other: &Value) -> bool {
+            match (self, other) {
+                (Self::Int64(n1), Self::Int64(n2)) => n1 == n2,
+                (Self::Float(n1), Self::Float(n2)) => n1 == n2,
+                (Self::Bool(b1), Self::Bool(b2)) => b1 == b2,
+                (Self::Str(s1), Self::Str(s2)) => s1 == s2,
+                _ => false,
+            }
+        }
     }
 
     impl Display for Value {
