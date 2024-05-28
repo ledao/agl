@@ -67,4 +67,4 @@ println(result2)
 let bool_v = true
 println(bool_v)
 
-#assert(a >= b, "expect a >= b")
+assert(a > b, "expect a >= b")

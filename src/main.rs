@@ -445,8 +445,23 @@ mod ast {
                     }
                     *pos += 1;
                     let expr = Expr::parse_comparison_op(tokens, pos);
-                    
-                    Stmt::Assert(exprs)
+                    if *pos >= tokens.len() {
+                        panic!("Position out of range, current pos {}, total length {}", *pos, tokens.len());
+                    }
+                    if tokens[*pos] == Token::LParen {
+                        *pos += 1;
+                        Stmt::Assert(expr, "".to_string())
+                    } else if tokens[*pos] == Token::Comma {
+                        *pos += 1;
+                        if let Expr::Str(s) = Expr::parse_primary(tokens, pos) {
+                            *pos += 1;
+                            Stmt::Assert(expr, s.clone())
+                        } else {
+                            panic!("Expected string in assert function last parameter")
+                        }
+                    } else {
+                        panic!("Expected ',' in function definition")
+                    }
                 }
                 Token::If => {
                     *pos += 1;
@@ -826,18 +841,6 @@ mod vm {
         Fn(Vec<(String, ValueType)>, Vec<Stmt>),
     }
 
-    impl Value {
-        fn equals(&self, other: &Value) -> bool {
-            match (self, other) {
-                (Self::Int64(n1), Self::Int64(n2)) => n1 == n2,
-                (Self::Float(n1), Self::Float(n2)) => n1 == n2,
-                (Self::Bool(b1), Self::Bool(b2)) => b1 == b2,
-                (Self::Str(s1), Self::Str(s2)) => s1 == s2,
-                _ => false,
-            }
-        }
-    }
-
     impl Display for Value {
         fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
             match self {
@@ -891,6 +894,11 @@ mod vm {
                 Stmt::Println(expr) => {
                     let value = self.evaluate_expr(expr);
                     println!("{}", value);
+                }
+                Stmt::Assert(expr, s) => {
+                    if !self.evaluate_cond(expr) {
+                        println!("assert fails, {:?}, {}", expr, s);
+                    }
                 }
                 Stmt::If(cond, true_branch, false_branch) => {
                     if self.evaluate_cond(cond) {
