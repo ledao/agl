@@ -256,6 +256,7 @@ mod ast {
     #[derive(Debug, Clone)]
     pub enum Stmt {
         Let(String, ValueType, Expr),
+        Mut(String, ValueType, Expr),
         Print(Expr),
         Println(Expr),
         Assert(Expr, String),
