@@ -278,7 +278,7 @@ mod ast {
         Var(String),
         Str(String),
         BinOp(Box<Expr>, BinOp, Box<Expr>),
-        StructField(Box<Expr>, String, String),
+        StructFieldAccess(Box<Expr>, String, String), // struct instalce name, field_name, struct type name
         FnCall(String, Vec<Expr>),
     }
 
@@ -806,7 +806,7 @@ mod ast {
                         *pos += 1;
                         if let Token::Var(field_name) = &tokens[*pos] {
                             *pos += 1;
-                            return Expr::StructField(
+                            return Expr::StructFieldAccess(
                                 Box::new(Expr::Var(var_name.clone())),
                                 field_name.clone(),
                                 "".to_string(),
@@ -890,7 +890,7 @@ mod vm {
         Float(f64),
         Bool(bool),
         Str(String),
-        StructInstance(HashMap<String, Value>, String, String),
+        StructInstance(HashMap<String, Value>, String, String), // fields, var_name, struct_name
         Fn(Vec<(String, ValueType)>, Vec<Stmt>),
     }
 
@@ -1046,7 +1046,8 @@ mod vm {
                         _ => panic!("Invalid binary operation"),
                     }
                 }
-                Expr::StructField(expr, field_name, _struct_name) => {
+                Expr::StructFieldAccess(expr, field_name, _struct_name) => {
+
                     if let Value::StructInstance(instance, _var_name, _struct_name) =
                         self.evaluate_expr(expr)
                     {
