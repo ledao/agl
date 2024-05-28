@@ -879,9 +879,9 @@ mod vm {
     };
 
     pub struct VM {
-        global_variables: HashMap<String, Value>,
+        global_variables: HashMap<String, (Value, Mutabble)>,
         structs: HashMap<String, StructDef>,
-        local_variables: Vec<HashMap<String, Value>>,
+        local_variables: Vec<HashMap<String, (Value, Mutabble)>>,
     }
 
     #[derive(Debug, Clone)]
@@ -914,6 +914,12 @@ mod vm {
         }
     }
 
+    #[derive(Clone)]
+    enum Mutabble {
+        Let,
+        Mut,
+    }
+
     #[derive(Debug, Clone)]
     pub struct StructDef {
         fields: HashMap<String, ValueType>,
@@ -938,7 +944,11 @@ mod vm {
             match stmt {
                 Stmt::Let(var_name, _var_type, expr) => {
                     let value = self.evaluate_expr(expr);
-                    self.current_env().insert(var_name.clone(), value);
+                    self.current_env().insert(var_name.clone(), (value, Mutabble::Let));
+                }
+                Stmt::Mut(var_name, _var_type, expr) => {
+                    let value = self.evaluate_expr(expr);
+                    self.current_env().insert(var_name.clone(), (value, Mutabble::Mut));
                 }
                 Stmt::Print(expr) => {
                     let value = self.evaluate_expr(expr);
@@ -984,7 +994,7 @@ mod vm {
                         }
                         self.current_env().insert(
                             var_name.clone(),
-                            Value::StructInstance(instance, var_name.clone(), struct_name.clone()),
+                            (Value::StructInstance(instance, var_name.clone(), struct_name.clone()), Mutabble::Let),
                         );
                     } else {
                         panic!("Struct '{}' not defined", struct_name);
@@ -992,11 +1002,21 @@ mod vm {
                 }
                 Stmt::FnDef(name, params, body, _return_type) => {
                     self.global_variables
-                        .insert(name.clone(), Value::Fn(params.clone(), body.clone()));
+                        .insert(name.clone(), (Value::Fn(params.clone(), body.clone()), Mutabble::Let));
                 }
                 Stmt::Return(expr) => {
                     let value = self.evaluate_expr(expr);
-                    self.current_env().insert("return".to_string(), value);
+                    self.current_env().insert("return".to_string(), (value, Mutabble::Let));
+                }
+                Stmt::Assign(var_name, expr) => {
+                    let value = self.evaluate_expr(expr);
+                    if let Some((_value, mutable)) = self.current_env().get(var_name) {
+                        match mutable {
+                            Mutabble::Let => panic!("Variable {} is not mutable", var_name),
+                            _ => {},
+                        }
+                    }
+                    self.current_env().insert(var_name.clone(), (value, Mutabble::Mut));
                 }
             }
         }
@@ -1046,7 +1066,7 @@ mod vm {
                         }
                         let mut new_env = HashMap::new();
                         for (param, arg) in params.iter().zip(args.iter()) {
-                            new_env.insert(param.0.clone(), self.evaluate_expr(arg));
+                            new_env.insert(param.0.clone(), (self.evaluate_expr(arg), Mutabble::Let));
                         }
                         self.local_variables.push(new_env);
                         self.run(&body);
@@ -1055,8 +1075,8 @@ mod vm {
                             .pop()
                             .unwrap()
                             .remove("return")
-                            .unwrap_or(Value::Int64(0));
-                        ret_val
+                            .unwrap_or((Value::Int64(0), Mutabble::Let));
+                        ret_val.0
                     } else {
                         panic!("Expected function in function call to {}", func_name)
                     }
@@ -1067,13 +1087,14 @@ mod vm {
         fn lookup_var(&self, var_name: &str) -> Value {
             for env in self.local_variables.iter().rev() {
                 if let Some(value) = env.get(var_name) {
-                    return value.clone();
+                    return value.0.clone();
                 }
             }
-            self.global_variables
+            let a = self.global_variables
                 .get(var_name)
                 .cloned()
-                .unwrap_or_else(|| panic!("Undefined variable '{}'", var_name))
+                .unwrap_or_else(|| panic!("Undefined variable '{}'", var_name));
+            a.0
         }
 
         fn evaluate_cond(&mut self, expr: &Expr) -> bool {
@@ -1082,7 +1103,7 @@ mod vm {
                 _ => panic!("Expected numeric value in condition, {:?}", expr),
             }
         }
-        fn current_env(&mut self) -> &mut HashMap<String, Value> {
+        fn current_env(&mut self) -> &mut HashMap<String, (Value, Mutabble)> {
             self.local_variables.last_mut().unwrap()
         }
     }

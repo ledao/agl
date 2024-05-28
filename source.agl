@@ -72,3 +72,5 @@ assert(a > b, "expect a >= b")
 mut h = 0
 h = a + b
 println(h)
+h = 100
+println(h)
