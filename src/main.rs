@@ -7,6 +7,7 @@ mod lexer {
         Bool(bool),
         Float(f64),
         Var(String),
+        StructName(String),
         Str(String),
         Add,
         Sub,
@@ -98,7 +99,27 @@ mod lexer {
                         "true" => Token::Bool(true),
                         "false" => Token::Bool(false),
                         "assert" => Token::Assert,
-                        _ => Token::Var(ident),
+                        _ => {
+                            while let Some(&ch) = chars.peek() {
+                                match ch {
+                                    ' ' | '\t' => chars.next(),
+                                    _ => break,
+                                };
+                            };
+                            if !tokens.is_empty() && *tokens.last().unwrap() == Token::Assign {
+                                if let Some(&ch) = chars.peek() {
+                                    if ch == '{' {
+                                        Token::StructName(ident)
+                                    } else {
+                                        Token::Var(ident)
+                                    }
+                                } else {
+                                    Token::Var(ident)
+                                }
+                            } else {
+                                Token::Var(ident)
+                            }
+                        },
                     });
                 }
                 '"' => {
@@ -307,7 +328,7 @@ mod ast {
                         panic!("Unexpected end of tokens in let statement");
                     }
                     let mut var_type = ValueType::Void;
-                    if let Token::Var(ref var_name) = tokens[*pos] {
+                    if let Token::StructName(ref struct_name) = tokens[*pos] {
                         *pos += 1;
                         if Token::Colon == tokens[*pos] {
                             *pos += 1;
@@ -368,7 +389,7 @@ mod ast {
                                     }
                                     *pos += 1;
                                     return Stmt::StructInstance(
-                                        var_name.clone(),
+                                        struct_name.clone(),
                                         struct_name.clone(),
                                         fields,
                                     );
@@ -377,32 +398,32 @@ mod ast {
                                     let expr = Expr::parse_expr(tokens, pos);
                                     match var_type {
                                         ValueType::Void => {
-                                            return Stmt::Let(var_name.clone(), var_type, expr);
+                                            return Stmt::Let(struct_name.clone(), var_type, expr);
                                         }
                                         ValueType::Bool => {
                                             if let Expr::Bool(_) = expr {
-                                                return Stmt::Let(var_name.clone(), var_type, expr);
+                                                return Stmt::Let(struct_name.clone(), var_type, expr);
                                             } else {
                                                 panic!("Expected bool value in let statement")
                                             }
                                         }
                                         ValueType::Int => {
                                             if let Expr::Int64(_) = expr {
-                                                return Stmt::Let(var_name.clone(), var_type, expr);
+                                                return Stmt::Let(struct_name.clone(), var_type, expr);
                                             } else {
                                                 panic!("Expected int value in let statement")
                                             }
                                         }
                                         ValueType::Float => {
                                             if let Expr::Float(_) = expr {
-                                                return Stmt::Let(var_name.clone(), var_type, expr);
+                                                return Stmt::Let(struct_name.clone(), var_type, expr);
                                             } else {
                                                 panic!("Expected float value in let statement")
                                             }
                                         }
                                         ValueType::String => {
                                             if let Expr::Str(_) = expr {
-                                                return Stmt::Let(var_name.clone(), var_type, expr);
+                                                return Stmt::Let(struct_name.clone(), var_type, expr);
                                             } else {
                                                 panic!("Expected string value in let statement")
                                             }
