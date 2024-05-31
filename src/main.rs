@@ -6,7 +6,7 @@ mod lexer {
         Int64(i64),
         Bool(bool),
         Float(f64),
-        Var(String),
+        Name(String),
         Str(String),
         Add,
         Sub,
@@ -21,6 +21,7 @@ mod lexer {
         Comma,
         Dot,
         Let,
+        Mut,
         Print,
         Println,
         Assign,
@@ -82,6 +83,7 @@ mod lexer {
                     }
                     tokens.push(match ident.as_str() {
                         "let" => Token::Let,
+                        "mut" => Token::Mut,
                         "print" => Token::Print,
                         "println" => Token::Println,
                         "if" => Token::If,
@@ -96,7 +98,7 @@ mod lexer {
                         "true" => Token::Bool(true),
                         "false" => Token::Bool(false),
                         "assert" => Token::Assert,
-                        _ => Token::Var(ident),
+                        _ => Token::Name(ident),
                     });
                 }
                 '"' => {
@@ -255,13 +257,13 @@ mod ast {
 
     #[derive(Debug, Clone)]
     pub enum Stmt {
-        Let(String, ValueType, Expr),
+        Assign(String, ValueType, Expr, bool), // name, type, expr, is_mutable
         Print(Expr),
         Println(Expr),
         Assert(Expr, String),
         If(Expr, Vec<Stmt>, Option<Vec<Stmt>>),
         StructDef(String, Vec<(String, ValueType)>),
-        StructInstance(String, String, Vec<(String, Expr)>),
+        StructInstanceDeclaraAndInit(String, String, Vec<(String, Expr)>, bool), // name, type_name, fields, is_mutable
         FnDef(String, Vec<(String, ValueType)>, Vec<Stmt>, ValueType),
         Return(Expr),
     }
@@ -295,122 +297,154 @@ mod ast {
             stmts
         }
 
+        fn parse_assign(tokens: &[Token], pos: &mut usize, is_mutable: bool) -> Stmt {
+            if *pos >= tokens.len() {
+                panic!("Unexpected end of tokens in let statement");
+            }
+            let mut var_type = ValueType::Void;
+            if let Token::Name(ref var_name) = tokens[*pos] {
+                *pos += 1;
+                if Token::Colon == tokens[*pos] {
+                    *pos += 1;
+                    if *pos >= tokens.len() {
+                        panic!("Expected type name in let statement");
+                    }
+                    if let Token::Type(ref type_name) = tokens[*pos] {
+                        var_type = match type_name.as_str() {
+                            "int" => ValueType::Int,
+                            "float" => ValueType::Float,
+                            "string" => ValueType::String,
+                            "bool" => ValueType::Bool,
+                            _ => panic!("Unknown type name: {}", type_name),
+                        };
+                    } else {
+                        panic!("Expected type name in let statement")
+                    }
+                    *pos += 1;
+                }
+                if *pos >= tokens.len() || tokens[*pos] != Token::Assign {
+                    panic!("Expected '=' in let statement");
+                }
+                *pos += 1;
+                if *pos < tokens.len() {
+                    match &tokens[*pos] {
+                        Token::Name(struct_name)
+                            if *pos + 1 < tokens.len() && tokens[*pos + 1] == Token::LBrace =>
+                        {
+                            *pos += 2;
+                            let mut fields = Vec::new();
+                            while *pos < tokens.len() && tokens[*pos] != Token::RBrace {
+                                if Token::NewLine == tokens[*pos] {
+                                    *pos += 1;
+                                    continue;
+                                }
+                                if let Token::Name(ref field_name) = tokens[*pos] {
+                                    *pos += 1;
+                                    if *pos >= tokens.len() || tokens[*pos] != Token::Colon {
+                                        panic!("Expected ':' in struct instance");
+                                    }
+                                    *pos += 1;
+                                    let expr = Expr::parse_expr(tokens, pos);
+                                    fields.push((field_name.clone(), expr));
+                                    if *pos < tokens.len() && tokens[*pos] == Token::Comma {
+                                        *pos += 1;
+                                    }
+                                } else {
+                                    panic!(
+                                        "Expected field name in struct instance, {:?}",
+                                        tokens[*pos]
+                                    );
+                                }
+                            }
+                            if *pos >= tokens.len() || tokens[*pos] != Token::RBrace {
+                                panic!("Expected '}}' in struct instance");
+                            }
+                            *pos += 1;
+                            return Stmt::StructInstanceDeclaraAndInit(
+                                var_name.clone(),
+                                struct_name.clone(),
+                                fields,
+                                is_mutable,
+                            );
+                        }
+                        _ => {
+                            let expr = Expr::parse_expr(tokens, pos);
+                            match var_type {
+                                ValueType::Void => {
+                                    return Stmt::Assign(
+                                        var_name.clone(),
+                                        var_type,
+                                        expr,
+                                        is_mutable,
+                                    );
+                                }
+                                ValueType::Bool => {
+                                    if let Expr::Bool(_) = expr {
+                                        return Stmt::Assign(
+                                            var_name.clone(),
+                                            var_type,
+                                            expr,
+                                            is_mutable,
+                                        );
+                                    } else {
+                                        panic!("Expected bool value in let statement")
+                                    }
+                                }
+                                ValueType::Int => {
+                                    if let Expr::Int64(_) = expr {
+                                        return Stmt::Assign(
+                                            var_name.clone(),
+                                            var_type,
+                                            expr,
+                                            is_mutable,
+                                        );
+                                    } else {
+                                        panic!("Expected int value in let statement")
+                                    }
+                                }
+                                ValueType::Float => {
+                                    if let Expr::Float(_) = expr {
+                                        return Stmt::Assign(
+                                            var_name.clone(),
+                                            var_type,
+                                            expr,
+                                            is_mutable,
+                                        );
+                                    } else {
+                                        panic!("Expected float value in let statement")
+                                    }
+                                }
+                                ValueType::String => {
+                                    if let Expr::Str(_) = expr {
+                                        return Stmt::Assign(
+                                            var_name.clone(),
+                                            var_type,
+                                            expr,
+                                            is_mutable,
+                                        );
+                                    } else {
+                                        panic!("Expected string value in let statement")
+                                    }
+                                }
+                            };
+                        }
+                    }
+                }
+                panic!("Expected expression in let statement")
+            } else {
+                panic!("Expected variable name in let statement");
+            }
+        }
+
         fn parse_stmt(tokens: &[Token], pos: &mut usize) -> Stmt {
             match tokens[*pos] {
                 Token::Let => {
                     *pos += 1;
-                    if *pos >= tokens.len() {
-                        panic!("Unexpected end of tokens in let statement");
-                    }
-                    let mut var_type = ValueType::Void;
-                    if let Token::Var(ref var_name) = tokens[*pos] {
-                        *pos += 1;
-                        if Token::Colon == tokens[*pos] {
-                            *pos += 1;
-                            if *pos >= tokens.len() {
-                                panic!("Expected type name in let statement");
-                            }
-                            if let Token::Type(ref type_name) = tokens[*pos] {
-                                var_type = match type_name.as_str() {
-                                    "int" => ValueType::Int,
-                                    "float" => ValueType::Float,
-                                    "string" => ValueType::String,
-                                    "bool" => ValueType::Bool,
-                                    _ => panic!("Unknown type name: {}", type_name),
-                                };
-                            } else {
-                                panic!("Expected type name in let statement")
-                            }
-                            *pos += 1;
-                        }
-                        if *pos >= tokens.len() || tokens[*pos] != Token::Assign {
-                            panic!("Expected '=' in let statement");
-                        }
-                        *pos += 1;
-                        if *pos < tokens.len() {
-                            match &tokens[*pos] {
-                                Token::Var(struct_name)
-                                    if *pos + 1 < tokens.len()
-                                        && tokens[*pos + 1] == Token::LBrace =>
-                                {
-                                    *pos += 2;
-                                    let mut fields = Vec::new();
-                                    while *pos < tokens.len() && tokens[*pos] != Token::RBrace {
-                                        if Token::NewLine == tokens[*pos] {
-                                            *pos += 1;
-                                            continue;
-                                        }
-                                        if let Token::Var(ref field_name) = tokens[*pos] {
-                                            *pos += 1;
-                                            if *pos >= tokens.len() || tokens[*pos] != Token::Colon
-                                            {
-                                                panic!("Expected ':' in struct instance");
-                                            }
-                                            *pos += 1;
-                                            let expr = Expr::parse_expr(tokens, pos);
-                                            fields.push((field_name.clone(), expr));
-                                            if *pos < tokens.len() && tokens[*pos] == Token::Comma {
-                                                *pos += 1;
-                                            }
-                                        } else {
-                                            panic!(
-                                                "Expected field name in struct instance, {:?}",
-                                                tokens[*pos]
-                                            );
-                                        }
-                                    }
-                                    if *pos >= tokens.len() || tokens[*pos] != Token::RBrace {
-                                        panic!("Expected '}}' in struct instance");
-                                    }
-                                    *pos += 1;
-                                    return Stmt::StructInstance(
-                                        var_name.clone(),
-                                        struct_name.clone(),
-                                        fields,
-                                    );
-                                }
-                                _ => {
-                                    let expr = Expr::parse_expr(tokens, pos);
-                                    match var_type {
-                                        ValueType::Void => {
-                                            return Stmt::Let(var_name.clone(), var_type, expr);
-                                        }
-                                        ValueType::Bool => {
-                                            if let Expr::Bool(_) = expr {
-                                                return Stmt::Let(var_name.clone(), var_type, expr);
-                                            } else {
-                                                panic!("Expected bool value in let statement")
-                                            }
-                                        }
-                                        ValueType::Int => {
-                                            if let Expr::Int64(_) = expr {
-                                                return Stmt::Let(var_name.clone(), var_type, expr);
-                                            } else {
-                                                panic!("Expected int value in let statement")
-                                            }
-                                        }
-                                        ValueType::Float => {
-                                            if let Expr::Float(_) = expr {
-                                                return Stmt::Let(var_name.clone(), var_type, expr);
-                                            } else {
-                                                panic!("Expected float value in let statement")
-                                            }
-                                        }
-                                        ValueType::String => {
-                                            if let Expr::Str(_) = expr {
-                                                return Stmt::Let(var_name.clone(), var_type, expr);
-                                            } else {
-                                                panic!("Expected string value in let statement")
-                                            }
-                                        }
-                                    };
-                                }
-                            }
-                        }
-                        panic!("Expected expression in let statement")
-                    } else {
-                        panic!("Expected variable name in let statement");
-                    }
+                    Self::parse_assign(tokens, pos, false)
+                }
+                Token::Mut => {
+                    *pos += 1;
+                    Self::parse_assign(tokens, pos, true)
                 }
                 Token::Print => {
                     *pos += 1;
@@ -446,7 +480,11 @@ mod ast {
                     *pos += 1;
                     let expr = Expr::parse_comparison_op(tokens, pos);
                     if *pos >= tokens.len() {
-                        panic!("Position out of range, current pos {}, total length {}", *pos, tokens.len());
+                        panic!(
+                            "Position out of range, current pos {}, total length {}",
+                            *pos,
+                            tokens.len()
+                        );
                     }
                     if tokens[*pos] == Token::LParen {
                         *pos += 1;
@@ -471,7 +509,7 @@ mod ast {
                 }
                 Token::Struct => {
                     *pos += 1;
-                    if let Token::Var(ref struct_name) = tokens[*pos] {
+                    if let Token::Name(ref struct_name) = tokens[*pos] {
                         *pos += 1;
                         if *pos >= tokens.len() || tokens[*pos] != Token::LBrace {
                             panic!("Expected '{{' in struct definition");
@@ -483,7 +521,7 @@ mod ast {
                                 *pos += 1;
                                 continue;
                             }
-                            if let Token::Var(ref field_name) = tokens[*pos] {
+                            if let Token::Name(ref field_name) = tokens[*pos] {
                                 *pos += 1;
                                 if *pos >= tokens.len() || tokens[*pos] != Token::Colon {
                                     panic!("Expected ':' in struct definition");
@@ -526,7 +564,7 @@ mod ast {
                 }
                 Token::Fn => {
                     *pos += 1;
-                    if let Token::Var(ref func_name) = tokens[*pos] {
+                    if let Token::Name(ref func_name) = tokens[*pos] {
                         *pos += 1;
                         if *pos >= tokens.len() || tokens[*pos] != Token::LParen {
                             panic!("Expected '(' in function definition");
@@ -538,7 +576,7 @@ mod ast {
                                 *pos += 1;
                                 continue;
                             }
-                            let param_name = if let Token::Var(ref param_name) = tokens[*pos] {
+                            let param_name = if let Token::Name(ref param_name) = tokens[*pos] {
                                 param_name
                             } else {
                                 panic!(
@@ -733,7 +771,7 @@ mod ast {
                     *pos += 1;
                     Expr::Float(f)
                 }
-                Token::Var(ref var_name) => {
+                Token::Name(ref var_name) => {
                     *pos += 1;
                     if *pos < tokens.len() && tokens[*pos] == Token::LParen {
                         *pos += 1;
@@ -751,7 +789,7 @@ mod ast {
                         return Expr::FnCall(var_name.clone(), args);
                     } else if *pos < tokens.len() && tokens[*pos] == Token::Dot {
                         *pos += 1;
-                        if let Token::Var(field_name) = &tokens[*pos] {
+                        if let Token::Name(field_name) = &tokens[*pos] {
                             *pos += 1;
                             return Expr::StructField(
                                 Box::new(Expr::Var(var_name.clone())),
@@ -837,7 +875,7 @@ mod vm {
         Float(f64),
         Bool(bool),
         Str(String),
-        StructInstance(HashMap<String, Value>, String, String),
+        StructInstance(HashMap<String, Value>, String, String, bool), // fields, var_name, struct_name, is_mutable
         Fn(Vec<(String, ValueType)>, Vec<Stmt>),
     }
 
@@ -848,7 +886,7 @@ mod vm {
                 Self::Float(n) => write!(f, "{}", n),
                 Self::Bool(b) => write!(f, "{}", b),
                 Self::Str(s) => write!(f, "\"{}\"", s),
-                Self::StructInstance(fields, var_name, struct_name) => {
+                Self::StructInstance(fields, var_name, struct_name, _is_mutable) => {
                     write!(f, "{} {} {{", struct_name, var_name)?;
                     for (field_name, field_value) in fields {
                         write!(f, " {}:{} ", field_name, field_value)?;
@@ -883,7 +921,7 @@ mod vm {
 
         fn execute_stmt(&mut self, stmt: &Stmt) {
             match stmt {
-                Stmt::Let(var_name, _var_type, expr) => {
+                Stmt::Assign(var_name, _var_type, expr, _is_mutable) => {
                     let value = self.evaluate_expr(expr);
                     self.current_env().insert(var_name.clone(), value);
                 }
@@ -915,7 +953,7 @@ mod vm {
                     self.structs
                         .insert(name.clone(), StructDef { fields: field_map });
                 }
-                Stmt::StructInstance(var_name, struct_name, fields) => {
+                Stmt::StructInstanceDeclaraAndInit(var_name, struct_name, fields, is_mutable) => {
                     if let Some(struct_def) = self.structs.get(struct_name).cloned() {
                         let mut instance = HashMap::new();
                         for (field_name, expr) in fields {
@@ -931,7 +969,12 @@ mod vm {
                         }
                         self.current_env().insert(
                             var_name.clone(),
-                            Value::StructInstance(instance, var_name.clone(), struct_name.clone()),
+                            Value::StructInstance(
+                                instance,
+                                var_name.clone(),
+                                struct_name.clone(),
+                                *is_mutable,
+                            ),
                         );
                     } else {
                         panic!("Struct '{}' not defined", struct_name);
@@ -974,7 +1017,7 @@ mod vm {
                     }
                 }
                 Expr::StructField(expr, field_name, _struct_name) => {
-                    if let Value::StructInstance(instance, _var_name, _struct_name) =
+                    if let Value::StructInstance(instance, _var_name, _struct_name, _is_mutable) =
                         self.evaluate_expr(expr)
                     {
                         if let Some(value) = instance.get(field_name) {

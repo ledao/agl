@@ -68,3 +68,6 @@ let bool_v = true
 println(bool_v)
 
 assert(a > b, "expect a >= b")
+
+mut mut_var = 123
+print(mut_var)
